@@ -42,7 +42,7 @@ export default function AssetManager({ onBack }: AssetManagerProps) {
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => void loadAssets()} title="刷新资产" className="p-2 text-slate-300 hover:bg-white/10 rounded-lg cursor-pointer"><RefreshCw className="w-4 h-4" /></button>
-            <button onClick={onBack} className="px-3 py-2 text-xs font-semibold text-slate-200 border border-white/10 hover:bg-white/10 rounded-lg cursor-pointer">返回首页</button>
+            <button onClick={onBack} className="px-3 py-2 text-xs font-semibold text-slate-200 border border-white/10 hover:bg-white/10 rounded-lg cursor-pointer">返回</button>
           </div>
         </header>
 

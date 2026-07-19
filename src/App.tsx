@@ -15,6 +15,7 @@ import {
   FolderPlus,
   Archive,
   ChevronLeft,
+  Home,
   Settings,
   Images,
   X
@@ -122,10 +123,22 @@ export default function App() {
   });
 
   const currentProject = projects.find((project) => project.id === currentProjectId);
-  const [showProjectPanel, setShowProjectPanel] = useState(true);
+  const [showProjectPanel, setShowProjectPanel] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [showBanner, setShowBanner] = useState(true);
   const [homeView, setHomeView] = useState<"home" | "settings" | "assets">("home");
+  const [returnProjectId, setReturnProjectId] = useState<string | null>(null);
+
+  const returnToPreviousView = () => {
+    if (returnProjectId) {
+      setCurrentProjectId(returnProjectId);
+      localStorage.setItem("gpt_image_current_project_id", returnProjectId);
+      setReturnProjectId(null);
+      setHomeView("home");
+      return;
+    }
+    setHomeView("home");
+  };
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -1107,11 +1120,11 @@ export default function App() {
   };
 
   if (!currentProjectId && homeView === "settings") {
-    return <SettingsPanel config={config} onChangeConfig={handleUpdateConfig} onBack={() => setHomeView("home")} />;
+    return <SettingsPanel config={config} onChangeConfig={handleUpdateConfig} onBack={returnToPreviousView} />;
   }
 
   if (!currentProjectId && homeView === "assets") {
-    return <AssetManager onBack={() => setHomeView("home")} />;
+    return <AssetManager onBack={returnToPreviousView} />;
   }
 
   if (!currentProjectId) {
@@ -1138,8 +1151,8 @@ export default function App() {
           </div>
 
           <nav className="flex items-center justify-center gap-2">
-            <button onClick={() => setHomeView("settings")} className="px-3 py-2 rounded-lg border border-white/10 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white flex items-center gap-1.5 cursor-pointer"><Settings className="w-3.5 h-3.5 text-indigo-400" />设置</button>
-            <button onClick={() => setHomeView("assets")} className="px-3 py-2 rounded-lg border border-white/10 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white flex items-center gap-1.5 cursor-pointer"><Images className="w-3.5 h-3.5 text-emerald-400" />资产管理</button>
+            <button onClick={() => { setReturnProjectId(null); setHomeView("settings"); }} className="px-3 py-2 rounded-lg border border-white/10 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white flex items-center gap-1.5 cursor-pointer"><Settings className="w-3.5 h-3.5 text-indigo-400" />设置</button>
+            <button onClick={() => { setReturnProjectId(null); setHomeView("assets"); }} className="px-3 py-2 rounded-lg border border-white/10 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white flex items-center gap-1.5 cursor-pointer"><Images className="w-3.5 h-3.5 text-emerald-400" />资产管理</button>
           </nav>
 
           {/* Cards Container */}
@@ -1378,19 +1391,47 @@ export default function App() {
             )}
           </div>
 
-          {/* Exit Project / Create New Overlay Link */}
+          {/* Canvas navigation */}
           {currentProjectId && (
-            <div className="p-3 border-t border-white/10 bg-slate-900/40 text-center">
+            <div className="p-3 border-t border-white/10 bg-slate-900/40 grid grid-cols-3 gap-1">
               <button
                 type="button"
                 onClick={() => {
                   setCurrentProjectId(null);
                   localStorage.removeItem("gpt_image_current_project_id");
+                  setReturnProjectId(null);
+                  setHomeView("home");
                 }}
-                className="text-xs font-bold text-indigo-400 hover:text-indigo-300 flex items-center justify-center gap-1.5 w-full py-1.5 hover:bg-white/5 rounded-xl transition-all cursor-pointer"
+                className="text-xs font-bold text-indigo-400 hover:text-indigo-300 flex items-center justify-center gap-1.5 min-w-0 py-1.5 hover:bg-white/5 rounded-xl transition-all cursor-pointer"
               >
-                <ChevronLeft className="w-3.5 h-3.5" />
-                <span>返回主页</span>
+                <Home className="w-3.5 h-3.5 shrink-0" />
+                <span>主页</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setReturnProjectId(currentProjectId);
+                  setCurrentProjectId(null);
+                  localStorage.removeItem("gpt_image_current_project_id");
+                  setHomeView("assets");
+                }}
+                className="text-xs font-bold text-emerald-400 hover:text-emerald-300 flex items-center justify-center gap-1.5 min-w-0 py-1.5 hover:bg-white/5 rounded-xl transition-all cursor-pointer"
+              >
+                <Images className="w-3.5 h-3.5 shrink-0" />
+                <span>资产</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setReturnProjectId(currentProjectId);
+                  setCurrentProjectId(null);
+                  localStorage.removeItem("gpt_image_current_project_id");
+                  setHomeView("settings");
+                }}
+                className="text-xs font-bold text-indigo-400 hover:text-indigo-300 flex items-center justify-center gap-1.5 min-w-0 py-1.5 hover:bg-white/5 rounded-xl transition-all cursor-pointer"
+              >
+                <Settings className="w-3.5 h-3.5 shrink-0" />
+                <span>设置</span>
               </button>
             </div>
           )}

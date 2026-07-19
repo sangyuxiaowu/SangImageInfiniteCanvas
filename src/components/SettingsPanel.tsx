@@ -63,7 +63,7 @@ export default function SettingsPanel({ config, onChangeConfig, onBack }: Settin
               <Shield className="w-4 h-4 text-indigo-400" />
               <div><p className="text-xs text-indigo-400 font-semibold">应用配置</p><h1 className="text-xl font-semibold text-white">接入点与模型</h1></div>
             </div>
-            {onBack ? <button onClick={onBack} className="px-3 py-2 text-xs font-semibold text-slate-200 border border-white/10 hover:bg-white/10 rounded-lg cursor-pointer">返回首页</button> : <button onClick={() => setIsOpen(false)} title="关闭设置" className="p-1 text-slate-400 hover:text-white cursor-pointer"><X className="w-4 h-4" /></button>}
+            {onBack ? <button onClick={onBack} className="px-3 py-2 text-xs font-semibold text-slate-200 border border-white/10 hover:bg-white/10 rounded-lg cursor-pointer">返回</button> : <button onClick={() => setIsOpen(false)} title="关闭设置" className="p-1 text-slate-400 hover:text-white cursor-pointer"><X className="w-4 h-4" /></button>}
           </header>
 
           {config.endpoints.map((endpoint) => (
