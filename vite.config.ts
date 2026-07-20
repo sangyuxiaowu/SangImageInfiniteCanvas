@@ -12,6 +12,10 @@ export default defineConfig(() => {
       },
     },
     server: {
+      port: 3000,
+      watch: {
+        ignored: ['**/docs/**', '**/dist/**', '**/build/**', '**/node_modules/**', '**/scripts/**']
+      },
     },
   };
 });

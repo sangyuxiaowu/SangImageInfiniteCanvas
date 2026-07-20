@@ -137,3 +137,4 @@ npm start      # 启动生产构建产物
 ## 参考资料
 
 - [Azure OpenAI Image Generations / Edits API](https://learn.microsoft.com/en-us/azure/foundry/openai/reference-preview#image-generations---edit)
+- [Azure OpenAI pricing](https://azure.microsoft.com/en-us/pricing/details/azure-openai/)
