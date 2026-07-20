@@ -19,11 +19,28 @@ const createEndpoint = (): ApiEndpoint => ({
 export default function SettingsPanel({ config, onChangeConfig, onBack }: SettingsPanelProps) {
   const [isOpen, setIsOpen] = useState(Boolean(onBack));
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
+  const [editingModels, setEditingModels] = useState<Record<string, string>>({});
 
   const updateEndpoint = (endpointId: string, changes: Partial<ApiEndpoint>) => {
     onChangeConfig({
       ...config,
       endpoints: config.endpoints.map((endpoint) => endpoint.id === endpointId ? { ...endpoint, ...changes } : endpoint),
+    });
+  };
+
+  const handleModelChange = (endpointId: string, text: string) => {
+    setEditingModels((prev) => ({ ...prev, [endpointId]: text }));
+  };
+
+  const commitModels = (endpointId: string) => {
+    const text = editingModels[endpointId];
+    if (text === undefined) return;
+    const models = text.split(",").map((m) => m.trim()).filter(Boolean);
+    updateEndpoint(endpointId, { models });
+    setEditingModels((prev) => {
+      const next = { ...prev };
+      delete next[endpointId];
+      return next;
     });
   };
 
@@ -96,7 +113,14 @@ export default function SettingsPanel({ config, onChangeConfig, onBack }: Settin
               </label>
               <label className="relative block">
                 <Cpu className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-slate-500" />
-                <input value={endpoint.models.join(", ")} onChange={(event) => updateEndpoint(endpoint.id, { models: event.target.value.split(",").map((model) => model.trim()).filter(Boolean) })} placeholder="gpt-image-2, dall-e-3" className="w-full bg-slate-900 border border-white/10 rounded-lg pl-8 pr-2.5 py-2 text-xs font-mono focus:outline-none focus:border-indigo-500" />
+                <input
+                  value={editingModels[endpoint.id] ?? endpoint.models.join(", ")}
+                  onChange={(event) => handleModelChange(endpoint.id, event.target.value)}
+                  onBlur={() => commitModels(endpoint.id)}
+                  onFocus={() => handleModelChange(endpoint.id, endpoint.models.join(", "))}
+                  placeholder="gpt-image-2, dall-e-3"
+                  className="w-full bg-slate-900 border border-white/10 rounded-lg pl-8 pr-2.5 py-2 text-xs font-mono focus:outline-none focus:border-indigo-500"
+                />
               </label>
             </div>
           ))}
