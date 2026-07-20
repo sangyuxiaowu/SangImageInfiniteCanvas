@@ -19,9 +19,10 @@ import {
   Settings,
   Images,
   ClipboardList,
+  CircleDollarSign,
   X
 } from "lucide-react";
-import { CanvasNode, CanvasTool, AppConfig, ApiEndpoint, CanvasConnection, CanvasProject } from "./types";
+import { CanvasNode, CanvasTool, AppConfig, ApiEndpoint, CanvasConnection, CanvasProject, CanvasUsage } from "./types";
 import { getImageAssetUrl, saveImageAsset } from "./assets";
 import SettingsPanel from "./components/SettingsPanel";
 import AssetManager from "./components/AssetManager";
@@ -32,6 +33,45 @@ import { recordOperationLog } from "./operationLogs";
 import packageMetadata from "../package.json";
 
 const isTemporaryImageUrl = (value?: string) => value?.startsWith("data:") || value?.startsWith("blob:") || false;
+const EMPTY_CANVAS_USAGE: CanvasUsage = {
+  inputTextTokens: 0,
+  inputImageTokens: 0,
+  outputImageTokens: 0,
+  estimatedCostUsd: 0,
+};
+
+function normalizeCanvasUsage(value: unknown): CanvasUsage {
+  const usage = value as Partial<CanvasUsage> | undefined;
+  return {
+    inputTextTokens: Number(usage?.inputTextTokens) || 0,
+    inputImageTokens: Number(usage?.inputImageTokens) || 0,
+    outputImageTokens: Number(usage?.outputImageTokens) || 0,
+    estimatedCostUsd: Number(usage?.estimatedCostUsd) || 0,
+  };
+}
+
+function usageFromApiResponse(value: unknown): CanvasUsage {
+  const usage = (value as {
+    usage?: {
+      input_tokens_details?: { text_tokens?: number; image_tokens?: number };
+      output_tokens_details?: { image_tokens?: number };
+    };
+  })?.usage;
+  const inputTextTokens = Number(usage?.input_tokens_details?.text_tokens) || 0;
+  const inputImageTokens = Number(usage?.input_tokens_details?.image_tokens) || 0;
+  const outputImageTokens = Number(usage?.output_tokens_details?.image_tokens) || 0;
+
+  return {
+    inputTextTokens,
+    inputImageTokens,
+    outputImageTokens,
+    estimatedCostUsd: (inputTextTokens * 5 + inputImageTokens * 8 + outputImageTokens * 30) / 1_000_000,
+  };
+}
+
+function formatCost(value: number) {
+  return `$${value.toFixed(4)}`;
+}
 
 const defaultEndpoint: ApiEndpoint = {
   id: "openai-default",
@@ -105,6 +145,7 @@ export default function App() {
   const [zoom, setZoom] = useState(1.0);
   const [activeTool, setActiveTool] = useState<CanvasTool>("select");
   const [isSpacePressed, setIsSpacePressed] = useState(false);
+  const [isCanvasUsageExpanded, setIsCanvasUsageExpanded] = useState(false);
 
   // Canvas container ref for viewport measurements
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -126,6 +167,19 @@ export default function App() {
     return localStorage.getItem("gpt_image_current_project_id");
   });
 
+  const [canvasUsage, setCanvasUsage] = useState<CanvasUsage>(() => {
+    const activeProjectId = localStorage.getItem("gpt_image_current_project_id");
+    const savedProjects = localStorage.getItem("gpt_image_projects");
+    if (activeProjectId && savedProjects) {
+      try {
+        const activeProject = (JSON.parse(savedProjects) as CanvasProject[]).find((project) => project.id === activeProjectId);
+        if (activeProject) return normalizeCanvasUsage(activeProject.usage);
+      } catch (error) {}
+    }
+    return { ...EMPTY_CANVAS_USAGE };
+  });
+  const canvasUsageRef = useRef<CanvasUsage>(canvasUsage);
+
   const currentProject = projects.find((project) => project.id === currentProjectId);
   const [showProjectPanel, setShowProjectPanel] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
@@ -142,6 +196,39 @@ export default function App() {
       return;
     }
     setHomeView("home");
+  };
+
+  const addCanvasUsage = (apiResponse: unknown) => {
+    if (!currentProjectId) return;
+    const delta = usageFromApiResponse(apiResponse);
+    if (!delta.inputTextTokens && !delta.inputImageTokens && !delta.outputImageTokens) return;
+
+    const previousUsage = canvasUsageRef.current;
+    const nextUsage: CanvasUsage = {
+      inputTextTokens: previousUsage.inputTextTokens + delta.inputTextTokens,
+      inputImageTokens: previousUsage.inputImageTokens + delta.inputImageTokens,
+      outputImageTokens: previousUsage.outputImageTokens + delta.outputImageTokens,
+      estimatedCostUsd: previousUsage.estimatedCostUsd + delta.estimatedCostUsd,
+    };
+    canvasUsageRef.current = nextUsage;
+    setCanvasUsage(nextUsage);
+
+    setProjects((previousProjects) => {
+      const updatedProjects = previousProjects.map((project) => project.id === currentProjectId
+        ? { ...project, usage: nextUsage, updatedAt: Date.now() }
+        : project);
+      saveToLocalStorage("gpt_image_projects", updatedProjects.map((project) => ({
+        ...project,
+        nodes: project.nodes.map(nodeForLocalStorage),
+      })));
+      return updatedProjects;
+    });
+
+    recordOperationLog(
+      "记录画布消耗",
+      `文本输入 ${delta.inputTextTokens}，图片输入 ${delta.inputImageTokens}，图片输出 ${delta.outputImageTokens} tokens，预计 ${formatCost(delta.estimatedCostUsd)}`,
+      "success"
+    );
   };
 
   useEffect(() => {
@@ -342,6 +429,7 @@ export default function App() {
       panX: 100,
       panY: 100,
       zoom: 1.0,
+      usage: { ...EMPTY_CANVAS_USAGE },
       updatedAt: Date.now(),
     };
 
@@ -361,6 +449,9 @@ export default function App() {
     setPanX(newProj.panX);
     setPanY(newProj.panY);
     setZoom(newProj.zoom);
+    const usage = { ...EMPTY_CANVAS_USAGE };
+    canvasUsageRef.current = usage;
+    setCanvasUsage(usage);
     recordOperationLog("创建项目", newProj.name, "success");
   };
 
@@ -375,6 +466,9 @@ export default function App() {
     setPanX(proj.panX);
     setPanY(proj.panY);
     setZoom(proj.zoom);
+    const usage = normalizeCanvasUsage(proj.usage);
+    canvasUsageRef.current = usage;
+    setCanvasUsage(usage);
     recordOperationLog("打开项目", proj.name, "info");
   };
 
@@ -407,6 +501,7 @@ export default function App() {
       panX,
       panY,
       zoom,
+      usage: { ...EMPTY_CANVAS_USAGE },
       updatedAt: Date.now(),
     };
 
@@ -421,6 +516,9 @@ export default function App() {
 
     setCurrentProjectId(id);
     localStorage.setItem("gpt_image_current_project_id", id);
+    const usage = { ...EMPTY_CANVAS_USAGE };
+    canvasUsageRef.current = usage;
+    setCanvasUsage(usage);
     recordOperationLog("另存为新项目", newProj.name, "success");
   };
 
@@ -892,6 +990,7 @@ export default function App() {
       if (!imageUrls.length) {
         throw new Error("No image URL was returned in the API response.");
       }
+      addCanvasUsage(resJson);
 
       const generatedAt = Date.now();
       const outputNodes: CanvasNode[] = await Promise.all(imageUrls.map(async (sourceUrl: string, index: number) => {
@@ -1028,6 +1127,7 @@ export default function App() {
       if (!sourceUrls.length) {
         throw new Error("No image URL was returned in the API response.");
       }
+      addCanvasUsage(resJson);
 
       const storedImages = await Promise.all(sourceUrls.map(async (sourceUrl: string) => {
         const assetId = await saveImageAsset(sourceUrl);
@@ -1511,6 +1611,41 @@ export default function App() {
         <div className="w-px h-3.5 bg-white/10" />
         <span>节点: {nodes.length}</span>
       </div>
+
+      <section className="fixed bottom-6 left-6 z-30 text-slate-200">
+        {isCanvasUsageExpanded ? (
+          <div className="w-56 bg-slate-950/80 backdrop-blur-md border border-white/10 rounded-lg shadow-2xl px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <CircleDollarSign className="w-3.5 h-3.5 shrink-0 text-amber-300" />
+                <span className="text-[11px] font-bold text-white">画布消耗</span>
+              </div>
+              <button onClick={() => setIsCanvasUsageExpanded(false)} title="收起画布消耗" className="text-xs font-bold text-amber-300 font-mono hover:text-amber-200 cursor-pointer">
+                {formatCost(canvasUsage.estimatedCostUsd)}
+              </button>
+            </div>
+            <div className="mt-2 grid grid-cols-3 gap-1.5 text-center">
+              <div className="border-r border-white/10">
+                <p className="text-[9px] text-slate-500">文本输入</p>
+                <p className="mt-0.5 text-[11px] font-mono text-slate-200">{canvasUsage.inputTextTokens}</p>
+              </div>
+              <div className="border-r border-white/10">
+                <p className="text-[9px] text-slate-500">图片输入</p>
+                <p className="mt-0.5 text-[11px] font-mono text-slate-200">{canvasUsage.inputImageTokens}</p>
+              </div>
+              <div>
+                <p className="text-[9px] text-slate-500">图片输出</p>
+                <p className="mt-0.5 text-[11px] font-mono text-slate-200">{canvasUsage.outputImageTokens}</p>
+              </div>
+            </div>
+            <p className="mt-1.5 text-[9px] text-slate-500">按 $5 / $8 / $30 每百万 token 估算</p>
+          </div>
+        ) : (
+          <button onClick={() => setIsCanvasUsageExpanded(true)} title="查看画布消耗" className="w-9 h-9 bg-slate-950/80 backdrop-blur-md border border-white/10 rounded-lg shadow-xl flex items-center justify-center text-amber-300 hover:bg-slate-900 hover:text-amber-200 transition-colors cursor-pointer">
+            <CircleDollarSign className="w-4 h-4" />
+          </button>
+        )}
+      </section>
 
       {/* 5. Main Pannable & Zoomable Infinite Canvas Grid */}
       <div

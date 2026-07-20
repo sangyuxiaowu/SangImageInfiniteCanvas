@@ -75,6 +75,13 @@ export interface ApiEndpoint {
   models: string[];
 }
 
+export interface CanvasUsage {
+  inputTextTokens: number;
+  inputImageTokens: number;
+  outputImageTokens: number;
+  estimatedCostUsd: number;
+}
+
 export interface CanvasProject {
   id: string;
   name: string;
@@ -83,5 +90,6 @@ export interface CanvasProject {
   panX: number;
   panY: number;
   zoom: number;
+  usage?: CanvasUsage;
   updatedAt: number;
 }
