@@ -8,9 +8,15 @@
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "release": "node scripts/release.cjs",
+    "dev:tauri": "tauri dev",
+    "prebuild:tauri": "node scripts/sync-tauri-version.cjs && npx tauri icon --output src-tauri/icons docs/assets/logo.svg",
+    "build:tauri": "tauri build",
+    "tauri": "tauri"
   },
   "dependencies": {
+    "@tauri-apps/plugin-window-state": "^2.4.1",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "lucide-react": "^0.546.0",
@@ -22,6 +28,7 @@
     "motion": "^12.23.24"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.10.0",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",

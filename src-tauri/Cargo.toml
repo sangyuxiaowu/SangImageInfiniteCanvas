@@ -1,0 +1,14 @@
+[package]
+name = "sangimage"
+version = "1.0.0"
+edition = "2021"
+build = "build.rs"
+authors = ["sangyuxiaowu"]
+description = "Sang Image Infinite Canvas"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-window-state = "2"
