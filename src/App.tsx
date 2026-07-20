@@ -18,14 +18,17 @@ import {
   Home,
   Settings,
   Images,
+  ClipboardList,
   X
 } from "lucide-react";
 import { CanvasNode, CanvasTool, AppConfig, ApiEndpoint, CanvasConnection, CanvasProject } from "./types";
 import { getImageAssetUrl, saveImageAsset } from "./assets";
 import SettingsPanel from "./components/SettingsPanel";
 import AssetManager from "./components/AssetManager";
+import OperationLogPage from "./components/OperationLogPage";
 import Toolbar from "./components/Toolbar";
 import ImageNode from "./components/ImageNode";
+import { recordOperationLog } from "./operationLogs";
 import packageMetadata from "../package.json";
 
 const isTemporaryImageUrl = (value?: string) => value?.startsWith("data:") || value?.startsWith("blob:") || false;
@@ -91,6 +94,7 @@ export default function App() {
   const handleUpdateConfig = (newConfig: AppConfig) => {
     setConfig(newConfig);
     localStorage.setItem("gpt_image_config", JSON.stringify(newConfig));
+    recordOperationLog("更新接入点配置", `已保存 ${newConfig.endpoints.length} 个接入点`, "success");
   };
 
   const defaultEndpointConfig = config.endpoints.find((endpoint) => endpoint.id === config.defaultEndpointId) || config.endpoints[0] || defaultEndpoint;
@@ -126,7 +130,7 @@ export default function App() {
   const [showProjectPanel, setShowProjectPanel] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [showBanner, setShowBanner] = useState(true);
-  const [homeView, setHomeView] = useState<"home" | "settings" | "assets">("home");
+  const [homeView, setHomeView] = useState<"home" | "settings" | "assets" | "logs">("home");
   const [returnProjectId, setReturnProjectId] = useState<string | null>(null);
 
   const returnToPreviousView = () => {
@@ -357,6 +361,7 @@ export default function App() {
     setPanX(newProj.panX);
     setPanY(newProj.panY);
     setZoom(newProj.zoom);
+    recordOperationLog("创建项目", newProj.name, "success");
   };
 
   const handleLoadProject = (id: string) => {
@@ -370,10 +375,12 @@ export default function App() {
     setPanX(proj.panX);
     setPanY(proj.panY);
     setZoom(proj.zoom);
+    recordOperationLog("打开项目", proj.name, "info");
   };
 
   const handleDeleteProject = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    const project = projects.find((item) => item.id === id);
     setProjects((prev) => {
       const updated = prev.filter((p) => p.id !== id);
       saveToLocalStorage("gpt_image_projects", updated.map((project) => ({
@@ -387,6 +394,7 @@ export default function App() {
       setCurrentProjectId(null);
       localStorage.removeItem("gpt_image_current_project_id");
     }
+    recordOperationLog("删除项目", project?.name || "未命名项目", "success");
   };
 
   const handleSaveCurrentAsNewProject = (name: string) => {
@@ -413,6 +421,7 @@ export default function App() {
 
     setCurrentProjectId(id);
     localStorage.setItem("gpt_image_current_project_id", id);
+    recordOperationLog("另存为新项目", newProj.name, "success");
   };
 
   // Connection Linking Modes States
@@ -477,6 +486,7 @@ export default function App() {
       const hasReachedLimit = incomingNodes.filter((node) => node?.type === sourceNode.type).length >= sourceLimit;
       if (hasReachedLimit) return prev;
 
+      recordOperationLog("连接节点", `${sourceNode.type} 节点连接到 ${targetNode.type} 节点`, "success");
       return [...prev, { id: `conn-${Date.now()}`, fromId: connectingFromId, toId }];
     });
     setConnectingFromId(null);
@@ -556,6 +566,7 @@ export default function App() {
       ]);
       setConnections([]);
       handleRecenter();
+      recordOperationLog("清空画布", "已重置为一个生图节点", "success");
     }
   };
 
@@ -584,6 +595,7 @@ export default function App() {
       };
 
       setNodes((prev) => [...prev, newNode]);
+  recordOperationLog("添加节点", "新建生图节点", "success");
     }
   };
 
@@ -611,6 +623,7 @@ export default function App() {
       };
 
       setNodes((prev) => [...prev, newNode]);
+  recordOperationLog("添加节点", "新建编辑节点", "success");
     }
   };
 
@@ -638,6 +651,7 @@ export default function App() {
       };
 
       setNodes((prev) => [...prev, newNode]);
+  recordOperationLog("添加节点", "新建文本节点", "success");
     }
   };
 
@@ -671,6 +685,7 @@ export default function App() {
       };
 
       setNodes((prev) => [...prev, newNode]);
+  recordOperationLog("上传参考图", "已添加图片节点", "success");
     }
   };
 
@@ -735,6 +750,7 @@ export default function App() {
       ...prev,
       { id: `conn-${Date.now()}`, fromId: newImgId, toId: generatorId },
     ]);
+    recordOperationLog("上传参考图", "已添加并连接到生图节点", "success");
   };
 
   // Double Click empty canvas to spawn node at mouse position
@@ -769,6 +785,7 @@ export default function App() {
       };
 
       setNodes((prev) => [...prev, newNode]);
+      recordOperationLog("添加节点", "双击画布新建生图节点", "success");
     }
   };
 
@@ -837,6 +854,7 @@ export default function App() {
     setNodes((prev) =>
       prev.map((n) => (n.id === nodeId ? { ...n, status: "loading", prompt, error: undefined } : n))
     );
+    recordOperationLog("开始生成图像", `模型：${options.model || generatorNode.model}`, "info");
 
     try {
       const headers: Record<string, string> = {
@@ -918,12 +936,14 @@ export default function App() {
           toId: outputNode.id,
         })),
       ]);
+      recordOperationLog("生成图像完成", `已生成 ${outputNodes.length} 张图片`, "success");
     } catch (err: any) {
       if (err.name === "AbortError") return;
       console.error(err);
       setNodes((prev) =>
         prev.map((n) => (n.id === nodeId ? { ...n, status: "error", error: err.message || "请求失败" } : n))
       );
+      recordOperationLog("生成图像失败", err.message || "请求失败", "error");
     } finally {
       if (generationControllersRef.current.get(nodeId) === controller) {
         generationControllersRef.current.delete(nodeId);
@@ -968,6 +988,7 @@ export default function App() {
 
     const controller = new AbortController();
     generationControllersRef.current.set(nextNodeId, controller);
+    recordOperationLog("开始局部编辑", `模型：${options.model || parentNode.model}`, "info");
 
     try {
       const headers: Record<string, string> = {};
@@ -1034,12 +1055,14 @@ export default function App() {
             : n
         )
       );
+      recordOperationLog("局部编辑完成", `已生成 ${storedImages.length} 张图片`, "success");
     } catch (err: any) {
       if (err.name === "AbortError") return;
       console.error(err);
       setNodes((prev) =>
         prev.map((n) => (n.id === nextNodeId ? { ...n, status: "error", error: err.message || "编辑失败" } : n))
       );
+      recordOperationLog("局部编辑失败", err.message || "编辑失败", "error");
     } finally {
       if (generationControllersRef.current.get(nextNodeId) === controller) {
         generationControllersRef.current.delete(nextNodeId);
@@ -1048,6 +1071,7 @@ export default function App() {
   };
 
   const handleCancelGeneration = (nodeId: string) => {
+    const node = nodes.find((item) => item.id === nodeId);
     generationControllersRef.current.get(nodeId)?.abort();
     generationControllersRef.current.delete(nodeId);
 
@@ -1055,16 +1079,20 @@ export default function App() {
     if (isTemporaryEditOutput) {
       setNodes((prev) => prev.filter((node) => node.id !== nodeId));
       setConnections((prev) => prev.filter((connection) => connection.fromId !== nodeId && connection.toId !== nodeId));
+      recordOperationLog("取消图像任务", "已取消局部编辑", "info");
       return;
     }
 
     setNodes((prev) =>
       prev.map((node) => (node.id === nodeId ? { ...node, status: "idle", error: undefined } : node))
     );
+    recordOperationLog("取消图像任务", node?.type === "generator" ? "已取消生图任务" : "已取消图像任务", "info");
   };
 
   const handleDeleteNode = (id: string) => {
+    const node = nodes.find((item) => item.id === id);
     setNodes((prev) => prev.filter((n) => n.id !== id));
+    recordOperationLog("删除节点", node ? `${node.type} 节点` : "节点", "success");
   };
 
   const handleDuplicateNode = (id: string) => {
@@ -1084,6 +1112,7 @@ export default function App() {
       };
       return [...prev, duplicate];
     });
+    recordOperationLog("复制节点", "已创建节点副本", "success");
   };
 
   const handleCreateStandaloneImage = async (sourceNodeId: string, imageBlob: Blob) => {
@@ -1127,6 +1156,10 @@ export default function App() {
     return <AssetManager onBack={returnToPreviousView} />;
   }
 
+  if (!currentProjectId && homeView === "logs") {
+    return <OperationLogPage onBack={returnToPreviousView} />;
+  }
+
   if (!currentProjectId) {
     return (
       <div className="w-screen h-screen flex flex-col bg-[#020617] text-slate-200 overflow-hidden select-none font-sans relative items-center justify-center p-6">
@@ -1153,6 +1186,7 @@ export default function App() {
           <nav className="flex items-center justify-center gap-2">
             <button onClick={() => { setReturnProjectId(null); setHomeView("settings"); }} className="px-3 py-2 rounded-lg border border-white/10 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white flex items-center gap-1.5 cursor-pointer"><Settings className="w-3.5 h-3.5 text-indigo-400" />设置</button>
             <button onClick={() => { setReturnProjectId(null); setHomeView("assets"); }} className="px-3 py-2 rounded-lg border border-white/10 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white flex items-center gap-1.5 cursor-pointer"><Images className="w-3.5 h-3.5 text-emerald-400" />资产管理</button>
+            <button onClick={() => { setReturnProjectId(null); setHomeView("logs"); }} className="px-3 py-2 rounded-lg border border-white/10 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white flex items-center gap-1.5 cursor-pointer"><ClipboardList className="w-3.5 h-3.5 text-amber-300" />操作日志</button>
           </nav>
 
           {/* Cards Container */}
@@ -1393,7 +1427,7 @@ export default function App() {
 
           {/* Canvas navigation */}
           {currentProjectId && (
-            <div className="p-3 border-t border-white/10 bg-slate-900/40 grid grid-cols-3 gap-1">
+            <div className="p-3 border-t border-white/10 bg-slate-900/40 grid grid-cols-4 gap-1">
               <button
                 type="button"
                 onClick={() => {
@@ -1432,6 +1466,19 @@ export default function App() {
               >
                 <Settings className="w-3.5 h-3.5 shrink-0" />
                 <span>设置</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setReturnProjectId(currentProjectId);
+                  setCurrentProjectId(null);
+                  localStorage.removeItem("gpt_image_current_project_id");
+                  setHomeView("logs");
+                }}
+                className="text-xs font-bold text-amber-300 hover:text-amber-200 flex items-center justify-center gap-1.5 min-w-0 py-1.5 hover:bg-white/5 rounded-xl transition-all cursor-pointer"
+              >
+                <ClipboardList className="w-3.5 h-3.5 shrink-0" />
+                <span>日志</span>
               </button>
             </div>
           )}
