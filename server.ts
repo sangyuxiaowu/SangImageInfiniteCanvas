@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
+import { base64ToBlob, getImageApiConfiguration, normalizeImageCount, normalizeImageResponse, sanitizeForLog } from "./server/imageApi";
 
 // Load environment variables
 dotenv.config();
@@ -13,49 +14,6 @@ async function startServer() {
   // Increase the payload size limits for transferring base64 images
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
-
-  // Helper to convert base64 image string to Blob for multipart/form-data
-  function base64ToBlob(base64Str: string, defaultType = "image/png"): Blob {
-    const match = base64Str.match(/^data:([^;]+);/);
-    const mime = match ? match[1] : defaultType;
-    const base64Data = base64Str.replace(/^data:[^;]+;base64,/, "");
-    const buffer = Buffer.from(base64Data, "base64");
-    return new Blob([buffer], { type: mime });
-  }
-
-  // Helper to sanitize/truncate base64 strings and image data for logs
-  function sanitizeForLog(obj: any): any {
-    if (obj === null || obj === undefined) return obj;
-    if (Array.isArray(obj)) {
-      return obj.map(item => sanitizeForLog(item));
-    }
-    if (typeof obj === "object") {
-      const newObj: any = {};
-      for (const key of Object.keys(obj)) {
-        if (key === "image" || key === "mask" || key === "b64_json" || key === "url" || key === "imageUrl") {
-          const val = obj[key];
-          if (typeof val === "string") {
-            if (val.length > 20) {
-              newObj[key] = val.slice(0, 20) + `... [Omitted ${val.length - 20} characters]`;
-            } else {
-              newObj[key] = val;
-            }
-          } else {
-            newObj[key] = sanitizeForLog(val);
-          }
-        } else {
-          newObj[key] = sanitizeForLog(obj[key]);
-        }
-      }
-      return newObj;
-    }
-    if (typeof obj === "string") {
-      if (obj.startsWith("data:image/") || obj.length > 100) {
-        return obj.slice(0, 20) + `... [Omitted ${obj.length - 20} characters]`;
-      }
-    }
-    return obj;
-  }
 
   // CORS Proxy for images (to allow drawing on canvas for masking/edits without tainting)
   app.get("/api/proxy-image", async (req: express.Request, res: express.Response) => {
@@ -95,12 +53,7 @@ async function startServer() {
     try {
       const { image, prompt, size = "1024x1024", model = "gpt-image-2", quality, n = 1 } = req.body;
 
-      // Extract authorization key and base URL from headers or use backend default
-      const customApiKey = req.headers["x-api-key"] as string;
-      const customBaseUrl = req.headers["x-base-url"] as string;
-
-      const apiKey = customApiKey || process.env.GPT_IMAGE_API_KEY;
-      const baseUrl = (customBaseUrl || process.env.GPT_IMAGE_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
+      const { apiKey, baseUrl } = getImageApiConfiguration(req.headers);
 
       if (!apiKey) {
         res.status(401).json({
@@ -118,7 +71,7 @@ async function startServer() {
         model,
         prompt,
         size,
-        n: n ? Math.min(Math.max(parseInt(n.toString()), 1), 10) : 1,
+        n: normalizeImageCount(n),
         output_format: "png",
       };
 
@@ -174,23 +127,9 @@ async function startServer() {
         return;
       }
 
-      const data = await response.json();
+      const data = normalizeImageResponse(await response.json());
       console.log(`- Response Data (Sanitized):`, JSON.stringify(sanitizeForLog(data), null, 2));
       console.log("=========================================");
-
-      // Convert b64_json to standard data URI urls for frontend use
-      if (data.data && Array.isArray(data.data)) {
-        data.data = data.data.map((item: any) => {
-          if (item.b64_json && !item.url) {
-            const prefix = item.b64_json.startsWith("data:") ? "" : "data:image/png;base64,";
-            return {
-              ...item,
-              url: `${prefix}${item.b64_json}`
-            };
-          }
-          return item;
-        });
-      }
 
       res.json(data);
     } catch (err: any) {
@@ -222,12 +161,7 @@ async function startServer() {
         return;
       }
 
-      // Extract authorization key and base URL from headers or use backend default
-      const customApiKey = req.headers["x-api-key"] as string;
-      const customBaseUrl = req.headers["x-base-url"] as string;
-
-      const apiKey = customApiKey || process.env.GPT_IMAGE_API_KEY;
-      const baseUrl = (customBaseUrl || process.env.GPT_IMAGE_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
+      const { apiKey, baseUrl } = getImageApiConfiguration(req.headers);
 
       if (!apiKey) {
         res.status(401).json({
@@ -243,7 +177,7 @@ async function startServer() {
         prompt,
         model,
         size,
-        n: n ? Math.min(Math.max(parseInt(n.toString()), 1), 10) : 1,
+        n: normalizeImageCount(n),
         output_format: "png",
         image: image,
         mask: mask || undefined,
@@ -275,7 +209,7 @@ async function startServer() {
       formData.append("prompt", prompt);
       formData.append("model", model);
       formData.append("size", size);
-      formData.append("n", n ? Math.min(Math.max(parseInt(n.toString()), 1), 10).toString() : "1");
+      formData.append("n", normalizeImageCount(n).toString());
       formData.append("output_format", "png");
       console.log(`- Multipart Files: image.png (${imageBlob.type}, ${imageBlob.size} bytes)${maskBlob ? `, mask.png (${maskBlob.type}, ${maskBlob.size} bytes)` : ""}`);
 
@@ -311,23 +245,9 @@ async function startServer() {
         return;
       }
 
-      const data = await response.json();
+      const data = normalizeImageResponse(await response.json());
       console.log(`- Response Data (Sanitized):`, JSON.stringify(sanitizeForLog(data), null, 2));
       console.log("=========================================");
-
-      // Convert b64_json to standard data URI urls for frontend use
-      if (data.data && Array.isArray(data.data)) {
-        data.data = data.data.map((item: any) => {
-          if (item.b64_json && !item.url) {
-            const prefix = item.b64_json.startsWith("data:") ? "" : "data:image/png;base64,";
-            return {
-              ...item,
-              url: `${prefix}${item.b64_json}`
-            };
-          }
-          return item;
-        });
-      }
 
       res.json(data);
     } catch (err: any) {

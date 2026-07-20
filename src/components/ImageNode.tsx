@@ -22,6 +22,8 @@ import {
 } from "lucide-react";
 import { ApiEndpoint, CanvasAspectRatio, CanvasNode, IMAGE_SIZE_BY_ASPECT_RATIO } from "../types";
 import { getImageAssetUrl, getMaskAssetUrl, saveMaskAsset } from "../assets";
+import { createCompositedEditBlob, downloadBlob, getCleanImageBase64, getImageRequestSource } from "../imageUtils";
+import TextNode from "./TextNode";
 
 interface ImageNodeProps {
   node: CanvasNode;
@@ -323,37 +325,12 @@ export default function ImageNode({
     onUpdatePosition(node.id, { maskAssetId: undefined });
   };
 
-  // Safe fetch function to load image via CORS proxy and draw on offscreen canvas to get clean base64
-  const getCleanBase64 = async (imageUrl: string): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        // Ensure standard dimensions for OpenAI edits (e.g. 1024x1024)
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL("image/png"));
-        } else {
-          reject(new Error("Unable to create offscreen canvas context."));
-        }
-      };
-      img.onerror = () => reject(new Error("Failed to load original image via proxy."));
-      img.src = imageUrl.startsWith("blob:") || imageUrl.startsWith("data:")
-        ? imageUrl
-        : `/api/proxy-image?url=${encodeURIComponent(imageUrl)}`;
-    });
-  };
-
   const generateWithReferenceImage = async (prompt: string) => {
     let referenceImageUrl = inputImage?.imageUrl;
     if (!referenceImageUrl && inputImage?.assetId) {
       referenceImageUrl = await getImageAssetUrl(inputImage.assetId);
     }
-    const image = referenceImageUrl ? await getCleanBase64(referenceImageUrl) : undefined;
+    const image = referenceImageUrl ? await getCleanImageBase64(referenceImageUrl) : undefined;
     onGenerate(node.id, prompt, {
       size: IMAGE_SIZE_BY_ASPECT_RATIO[aspectRatio],
       model: node.model,
@@ -420,11 +397,11 @@ export default function ImageNode({
       }
 
       // 1. Get original image as clean base64 (CORS safe)
-      const originalBase64 = await getCleanBase64(inputImage.imageUrl);
+      const originalBase64 = await getCleanImageBase64(inputImage.imageUrl);
 
       // 2. Get mask as clean base64
       const maskBase64 = savedMaskBase64
-        ? await getCleanBase64(savedMaskBase64)
+        ? await getCleanImageBase64(savedMaskBase64)
         : getMaskBase64();
       if (!maskBase64) {
         throw new Error("请先进入涂抹模式并保存涂抹蒙版。");
@@ -445,127 +422,6 @@ export default function ImageNode({
     } finally {
       setIsPreparingEdit(false);
     }
-  };
-
-  const downloadBlob = (blob: Blob, fileName: string) => {
-    const blobUrl = window.URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = blobUrl;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.URL.revokeObjectURL(blobUrl);
-  };
-
-  const getDownloadSource = (sourceUrl: string) => (
-    sourceUrl.startsWith("blob:") || sourceUrl.startsWith("data:")
-      ? sourceUrl
-      : `/api/proxy-image?url=${encodeURIComponent(sourceUrl)}`
-  );
-
-  const loadCanvasImage = (sourceUrl: string): Promise<HTMLImageElement> => new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("Unable to load image for download."));
-    image.src = getDownloadSource(sourceUrl);
-  });
-
-  const createCompositedEditBlob = async (
-    originalSource: string,
-    editedSource: string,
-    maskSource: string
-  ): Promise<Blob> => {
-    const [originalImage, editedImage, maskImage] = await Promise.all([
-      loadCanvasImage(originalSource),
-      loadCanvasImage(editedSource),
-      loadCanvasImage(maskSource),
-    ]);
-    const width = originalImage.naturalWidth || originalImage.width;
-    const height = originalImage.naturalHeight || originalImage.height;
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("Unable to create image composition canvas.");
-
-    context.drawImage(originalImage, 0, 0, width, height);
-    const editedCanvas = document.createElement("canvas");
-    editedCanvas.width = width;
-    editedCanvas.height = height;
-    const editedContext = editedCanvas.getContext("2d");
-    const maskCanvas = document.createElement("canvas");
-    maskCanvas.width = width;
-    maskCanvas.height = height;
-    const maskContext = maskCanvas.getContext("2d");
-    if (!editedContext || !maskContext) throw new Error("Unable to create edit composition canvas.");
-
-    editedContext.drawImage(editedImage, 0, 0, width, height);
-    maskContext.drawImage(maskImage, 0, 0, width, height);
-    const editedPixels = editedContext.getImageData(0, 0, width, height);
-    const maskPixels = maskContext.getImageData(0, 0, width, height);
-    const pixelCount = width * height;
-    const boundaryBlackPixels = new Uint8Array(pixelCount);
-    const queue: number[] = [];
-    const isMaskPixel = (index: number) => maskPixels.data[index * 4 + 3] > 8;
-    const isNearBlackPixel = (index: number) => {
-      const offset = index * 4;
-      const luminance = 0.2126 * editedPixels.data[offset]
-        + 0.7152 * editedPixels.data[offset + 1]
-        + 0.0722 * editedPixels.data[offset + 2];
-      return luminance < 24;
-    };
-
-    for (let index = 0; index < pixelCount; index += 1) {
-      if (!isMaskPixel(index) || !isNearBlackPixel(index)) continue;
-      const x = index % width;
-      const y = Math.floor(index / width);
-      const touchesMaskBoundary = x === 0 || y === 0 || x === width - 1 || y === height - 1
-        || !isMaskPixel(index - 1)
-        || !isMaskPixel(index + 1)
-        || !isMaskPixel(index - width)
-        || !isMaskPixel(index + width);
-      if (touchesMaskBoundary) {
-        boundaryBlackPixels[index] = 1;
-        queue.push(index);
-      }
-    }
-
-    for (let cursor = 0; cursor < queue.length; cursor += 1) {
-      const index = queue[cursor];
-      const x = index % width;
-      const y = Math.floor(index / width);
-      const neighbors = [
-        x > 0 ? index - 1 : -1,
-        x < width - 1 ? index + 1 : -1,
-        y > 0 ? index - width : -1,
-        y < height - 1 ? index + width : -1,
-      ];
-      neighbors.forEach((neighbor) => {
-        if (neighbor < 0 || boundaryBlackPixels[neighbor] || !isMaskPixel(neighbor) || !isNearBlackPixel(neighbor)) return;
-        boundaryBlackPixels[neighbor] = 1;
-        queue.push(neighbor);
-      });
-    }
-
-    for (let index = 0; index < pixelCount; index += 1) {
-      const offset = index * 4;
-      // Normalize the 45% brush alpha while retaining a soft edge.
-      const maskOpacity = Math.min(maskPixels.data[offset + 3] / 115, 1);
-      editedPixels.data[offset + 3] = boundaryBlackPixels[index]
-        ? 0
-        : Math.round(editedPixels.data[offset + 3] * maskOpacity);
-    }
-
-    editedContext.putImageData(editedPixels, 0, 0);
-    context.drawImage(editedCanvas, 0, 0);
-
-    return new Promise((resolve, reject) => {
-      canvas.toBlob((blob) => {
-        if (blob) resolve(blob);
-        else reject(new Error("Unable to export composited image."));
-      }, "image/png");
-    });
   };
 
   useEffect(() => {
@@ -600,7 +456,7 @@ export default function ImageNode({
 
   const handleDownloadMaskResult = async (sourceUrl: string, index: number) => {
     try {
-      const response = await fetch(getDownloadSource(sourceUrl));
+      const response = await fetch(getImageRequestSource(sourceUrl));
       downloadBlob(await response.blob(), `gpt-image-mask-result-${node.id}-${index + 1}.png`);
     } catch (err) {
       alert("下载失败，请重试！");
@@ -612,7 +468,7 @@ export default function ImageNode({
     try {
       const imageBlob = editResultBaseImageUrl && savedMaskBase64
         ? await createCompositedEditBlob(editResultBaseImageUrl, node.imageUrl, savedMaskBase64)
-        : await fetch(getDownloadSource(node.imageUrl)).then(async (response) => {
+        : await fetch(getImageRequestSource(node.imageUrl)).then(async (response) => {
           if (!response.ok) throw new Error("Unable to copy image asset.");
           return response.blob();
         });
@@ -632,7 +488,7 @@ export default function ImageNode({
         return;
       }
 
-      const response = await fetch(getDownloadSource(node.imageUrl));
+      const response = await fetch(getImageRequestSource(node.imageUrl));
       downloadBlob(await response.blob(), `gpt-image-${node.id}.png`);
     } catch (err) {
       alert("下载失败，请重试！");
@@ -649,106 +505,17 @@ export default function ImageNode({
 
   // ==================== BRANCH 1: TEXT STICKY NOTE NODE ====================
   if (node.type === "text") {
-    const isConnectingToThis = connectingFromId === node.id;
-    // Determine bg color based on color preset stored in prompt parameter
-    let colorClass = "bg-slate-950/65 border-white/10 text-slate-100 shadow-slate-950/55";
-    if (node.prompt === "indigo") {
-      colorClass = "bg-indigo-950/50 border-indigo-500/30 text-indigo-100 shadow-indigo-950/50 ring-1 ring-indigo-500/20";
-    } else if (node.prompt === "emerald") {
-      colorClass = "bg-emerald-950/50 border-emerald-500/30 text-emerald-100 shadow-emerald-950/50 ring-1 ring-emerald-500/20";
-    } else if (node.prompt === "amber") {
-      colorClass = "bg-amber-950/50 border-amber-500/30 text-amber-100 shadow-amber-950/50 ring-1 ring-amber-500/20";
-    } else if (node.prompt === "rose") {
-      colorClass = "bg-rose-950/50 border-rose-500/30 text-rose-100 shadow-rose-950/50 ring-1 ring-rose-500/20";
-    }
-
     return (
-      <div
-        id={`canvas-node-${node.id}`}
-        className={`absolute rounded-2xl border backdrop-blur-2xl transition-all select-none flex flex-col overflow-visible shadow-2xl border-white/10 ${colorClass}`}
-        style={{
-          left: node.x,
-          top: node.y,
-          width: node.width,
-          height: node.height,
-          zIndex: 15,
-        }}
-      >
-        {/* Header - Drag Handle */}
-        <div 
-          onMouseDown={handleMouseDown}
-          className={`bg-slate-900/50 border-b border-white/5 px-3 py-2 flex items-center justify-between select-none shrink-0 ${
-            activeTool === "select" ? "cursor-grab active:cursor-grabbing hover:bg-slate-900/70" : "cursor-default"
-          }`}
-        >
-          <div className="flex items-center gap-1.5">
-            <FileText className="w-3.5 h-3.5 text-indigo-400" />
-            <span className="text-[11px] font-bold tracking-tight">文本便签</span>
-          </div>
-
-          <div className="flex items-center gap-1 no-drag">
-            {/* Color Selectors */}
-            {["slate", "indigo", "emerald", "amber", "rose"].map((c) => (
-              <button
-                key={c}
-                onClick={() => onUpdatePosition(node.id, { prompt: c })}
-                className={`w-2.5 h-2.5 rounded-full border border-white/25 transition-transform hover:scale-125 cursor-pointer ${
-                  c === "slate" ? "bg-slate-500" :
-                  c === "indigo" ? "bg-indigo-500" :
-                  c === "emerald" ? "bg-emerald-500" :
-                  c === "amber" ? "bg-amber-500" : "bg-rose-500"
-                } ${node.prompt === c || (c === "slate" && !node.prompt) ? "ring-1 ring-white scale-110" : ""}`}
-              />
-            ))}
-            
-            <div className="w-px h-3 bg-white/10 mx-1" />
-
-            <button
-              onClick={() => onDuplicate(node.id)}
-              className="text-slate-400 hover:text-indigo-300 hover:bg-white/10 p-1 rounded-md transition-all cursor-pointer"
-              title="复制节点"
-            >
-              <Copy className="w-3 h-3" />
-            </button>
-
-            {/* Trash */}
-            <button
-              onClick={() => onDelete(node.id)}
-              className="text-slate-400 hover:text-rose-400 hover:bg-white/10 p-1 rounded-md transition-all cursor-pointer"
-              title="删除便签"
-            >
-              <Trash2 className="w-3 h-3" />
-            </button>
-          </div>
-        </div>
-
-        {/* Text Area */}
-        <div className="flex-1 p-3.5 no-drag select-none flex flex-col bg-slate-950/15">
-          <textarea
-            value={node.text || ""}
-            onChange={(e) => onUpdatePosition(node.id, { text: e.target.value })}
-            placeholder="让女孩抱着小猫..."
-            className="w-full flex-1 bg-transparent border-none text-slate-100 text-xs focus:outline-none focus:ring-0 placeholder-slate-500 resize-none font-medium leading-relaxed"
-          />
-        </div>
-
-        {/* Connection Port (Point) on the Right Side */}
-        <div className="absolute top-1/2 -right-1.5 -translate-y-1/2 z-50 no-drag">
-          <button
-            onPointerDown={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              onStartConnecting(node.id, event.clientX, event.clientY);
-            }}
-            className={`w-3 h-3 rounded-full border-2 transition-all hover:scale-150 cursor-pointer ${
-              isConnectingToThis
-                ? "border-indigo-300 animate-pulse shadow-[0_0_0_3px_rgba(99,102,241,0.35)]"
-                : "bg-transparent border-slate-300 hover:border-indigo-400"
-            }`}
-            title="拉出连线关联到生图或修改节点 (Drag/Click to connect)"
-          />
-        </div>
-      </div>
+      <TextNode
+        node={node}
+        activeTool={activeTool}
+        isConnecting={connectingFromId === node.id}
+        onMouseDown={handleMouseDown}
+        onUpdate={(updates) => onUpdatePosition(node.id, updates)}
+        onDuplicate={() => onDuplicate(node.id)}
+        onDelete={() => onDelete(node.id)}
+        onStartConnecting={(clientX, clientY) => onStartConnecting(node.id, clientX, clientY)}
+      />
     );
   }
 
