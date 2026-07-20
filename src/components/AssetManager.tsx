@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Image as ImageIcon, RefreshCw, Trash2 } from "lucide-react";
 import { deleteImageAsset, getImageAssetUrl, ImageAssetSummary, listImageAssets } from "../assets";
 
@@ -13,23 +13,32 @@ interface AssetItem extends ImageAssetSummary {
 export default function AssetManager({ onBack }: AssetManagerProps) {
   const [assets, setAssets] = useState<AssetItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const objectUrlsRef = useRef(new Set<string>());
 
   const loadAssets = async () => {
     setIsLoading(true);
     const summaries = await listImageAssets();
     const nextAssets = await Promise.all(summaries.map(async (asset) => ({ ...asset, url: await getImageAssetUrl(asset.id) })));
+    objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    objectUrlsRef.current.clear();
+    nextAssets.forEach((asset) => {
+      if (asset.url) objectUrlsRef.current.add(asset.url);
+    });
     setAssets(nextAssets);
     setIsLoading(false);
   };
 
   useEffect(() => {
     void loadAssets();
-    return () => assets.forEach((asset) => asset.url && URL.revokeObjectURL(asset.url));
+    return () => objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
   }, []);
 
   const removeAsset = async (asset: AssetItem) => {
     await deleteImageAsset(asset.id);
-    if (asset.url) URL.revokeObjectURL(asset.url);
+    if (asset.url) {
+      URL.revokeObjectURL(asset.url);
+      objectUrlsRef.current.delete(asset.url);
+    }
     setAssets((current) => current.filter((item) => item.id !== asset.id));
   };
 

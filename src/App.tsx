@@ -29,6 +29,7 @@ import AssetManager from "./components/AssetManager";
 import OperationLogPage from "./components/OperationLogPage";
 import Toolbar from "./components/Toolbar";
 import ImageNode from "./components/ImageNode";
+import { useImageGeneration } from "./hooks/useImageGeneration";
 import { recordOperationLog } from "./operationLogs";
 import packageMetadata from "../package.json";
 
@@ -304,7 +305,6 @@ export default function App() {
   });
 
   const assetObjectUrlsRef = useRef(new Set<string>());
-  const generationControllersRef = useRef(new Map<string, AbortController>());
 
   useEffect(() => {
     let cancelled = false;
@@ -342,10 +342,6 @@ export default function App() {
     assetObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
   }, []);
 
-  useEffect(() => () => {
-    generationControllersRef.current.forEach((controller) => controller.abort());
-  }, []);
-
   const [connections, setConnections] = useState<CanvasConnection[]>(() => {
     const activeProjId = localStorage.getItem("gpt_image_current_project_id");
     if (activeProjId) {
@@ -366,6 +362,16 @@ export default function App() {
       } catch (e) {}
     }
     return [];
+  });
+
+  const { generateImage: handleGenerateImage, generateEdit: handleGenerateEdit, cancelGeneration: handleCancelGeneration } = useImageGeneration({
+    nodes,
+    config,
+    defaultEndpoint: defaultEndpointConfig,
+    setNodes,
+    setConnections,
+    assetObjectUrlsRef,
+    onUsageReceived: addCanvasUsage,
   });
 
   // Saving state changes to local storage (only if NOT running in active project mode)
@@ -937,261 +943,10 @@ export default function App() {
     document.removeEventListener("mouseup", handleMouseUpCanvas);
   };
 
-  // 7. Core API Integration
-
-  // Text-To-Image Call
-  const handleGenerateImage = async (nodeId: string, prompt: string, options: any) => {
-    const generatorNode = nodes.find((node) => node.id === nodeId);
-    if (!generatorNode) return;
-    const endpoint = config.endpoints.find((item) => item.id === generatorNode.endpointId) || defaultEndpointConfig;
-
-    generationControllersRef.current.get(nodeId)?.abort();
-    const controller = new AbortController();
-    generationControllersRef.current.set(nodeId, controller);
-
-    setNodes((prev) =>
-      prev.map((n) => (n.id === nodeId ? { ...n, status: "loading", prompt, error: undefined } : n))
-    );
-    recordOperationLog("开始生成图像", `模型：${options.model || generatorNode.model}`, "info");
-
-    try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      if (endpoint.apiKey) {
-        headers["x-api-key"] = endpoint.apiKey;
-      }
-      if (endpoint.baseUrl) {
-        headers["x-base-url"] = endpoint.baseUrl;
-      }
-
-      const response = await fetch("/api/generate", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          prompt,
-          size: options.size,
-          model: options.model || "gpt-image-2",
-          quality: options.quality,
-          n: options.n,
-          image: options.image,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.details || errData.error || `Server error code ${response.status}`);
-      }
-
-      const resJson = await response.json();
-      const imageUrls = resJson.data?.map((item: any) => item.url).filter(Boolean) || [];
-
-      if (!imageUrls.length) {
-        throw new Error("No image URL was returned in the API response.");
-      }
-      addCanvasUsage(resJson);
-
-      const generatedAt = Date.now();
-      const outputNodes: CanvasNode[] = await Promise.all(imageUrls.map(async (sourceUrl: string, index: number) => {
-        const assetId = await saveImageAsset(sourceUrl);
-        const imageUrl = await getImageAssetUrl(assetId);
-        if (!imageUrl) throw new Error("Unable to load the generated image asset.");
-        assetObjectUrlsRef.current.add(imageUrl);
-        return {
-        id: `node-output-${generatedAt}-${index}`,
-        type: "image",
-        x: generatorNode.x + generatorNode.width + 64,
-        y: generatorNode.y + index * 444,
-        width: 400,
-        height: 420,
-        prompt,
-        imageUrl,
-        assetId,
-        isStandaloneImage: false,
-        status: "idle",
-        aspectRatio: generatorNode.aspectRatio,
-        model: options.model || generatorNode.model,
-        createdAt: generatedAt + index,
-        };
-      }));
-
-      setNodes((prev) => [
-        ...prev.map((node) => node.id === nodeId ? {
-          ...node,
-          status: "idle",
-          prompt,
-          imageUrl: undefined,
-          originalImageUrl: undefined,
-          imageUrls: undefined,
-        } : node),
-        ...outputNodes,
-      ]);
-      setConnections((prev) => [
-        ...prev,
-        ...outputNodes.map((outputNode, index) => ({
-          id: `conn-output-${generatedAt}-${index}`,
-          fromId: nodeId,
-          toId: outputNode.id,
-        })),
-      ]);
-      recordOperationLog("生成图像完成", `已生成 ${outputNodes.length} 张图片`, "success");
-    } catch (err: any) {
-      if (err.name === "AbortError") return;
-      console.error(err);
-      setNodes((prev) =>
-        prev.map((n) => (n.id === nodeId ? { ...n, status: "error", error: err.message || "请求失败" } : n))
-      );
-      recordOperationLog("生成图像失败", err.message || "请求失败", "error");
-    } finally {
-      if (generationControllersRef.current.get(nodeId) === controller) {
-        generationControllersRef.current.delete(nodeId);
-      }
-    }
-  };
-
-  // Inpainting Image-Editing Call
-  const handleGenerateEdit = async (
-    nodeId: string,
-    originalImageBase64: string,
-    maskBase64: string,
-    prompt: string,
-    options: any
-  ) => {
-    const parentNode = nodes.find((n) => n.id === nodeId);
-    if (!parentNode) return;
-    const endpoint = config.endpoints.find((item) => item.id === parentNode.endpointId) || defaultEndpointConfig;
-
-    // Keep enough room for the connection and node controls between edit results.
-    const nextNodeId = `node-edit-${Date.now()}`;
-    const nextNode: CanvasNode = {
-      id: nextNodeId,
-      type: "image",
-      x: parentNode.x + parentNode.width + 120,
-      y: parentNode.y,
-      width: parentNode.width,
-      height: parentNode.height,
-      prompt,
-      status: "loading",
-      isStandaloneImage: false,
-      aspectRatio: parentNode.aspectRatio,
-      model: options.model || parentNode.model || "gpt-image-2",
-      createdAt: Date.now(),
-    };
-
-    setNodes((prev) => [...prev, nextNode]);
-    setConnections((prev) => [
-      ...prev,
-      { id: `conn-edit-${nextNode.createdAt}`, fromId: nodeId, toId: nextNodeId },
-    ]);
-
-    const controller = new AbortController();
-    generationControllersRef.current.set(nextNodeId, controller);
-    recordOperationLog("开始局部编辑", `模型：${options.model || parentNode.model}`, "info");
-
-    try {
-      const headers: Record<string, string> = {};
-      if (endpoint.apiKey) {
-        headers["x-api-key"] = endpoint.apiKey;
-      }
-      if (endpoint.baseUrl) {
-        headers["x-base-url"] = endpoint.baseUrl;
-      }
-
-      const response = await fetch("/api/edit", {
-        method: "POST",
-        headers: {
-          ...headers,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          image: originalImageBase64,
-          mask: maskBase64,
-          prompt,
-          size: options.size,
-          model: options.model || "gpt-image-2",
-          quality: options.quality,
-          n: options.n,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.details || errData.error || `Server error code ${response.status}`);
-      }
-
-      const resJson = await response.json();
-      const sourceUrls = resJson.data?.map((item: any) => item.url).filter(Boolean) || [];
-
-      if (!sourceUrls.length) {
-        throw new Error("No image URL was returned in the API response.");
-      }
-      addCanvasUsage(resJson);
-
-      const storedImages = await Promise.all(sourceUrls.map(async (sourceUrl: string) => {
-        const assetId = await saveImageAsset(sourceUrl);
-        const imageUrl = await getImageAssetUrl(assetId);
-        if (!imageUrl) throw new Error("Unable to load the edited image asset.");
-        assetObjectUrlsRef.current.add(imageUrl);
-        return { assetId, imageUrl };
-      }));
-
-      // Load edited image into the newly spawned node
-      setNodes((prev) =>
-        prev.map((n) =>
-          n.id === nextNodeId
-            ? {
-                ...n,
-                status: "idle",
-                imageUrl: storedImages[0].imageUrl,
-                assetId: storedImages[0].assetId,
-                assetIds: storedImages.map((image) => image.assetId),
-                originalImageUrl: originalImageBase64,
-                maskAssetId: parentNode.maskAssetId,
-                imageUrls: storedImages.map((image) => image.imageUrl),
-                prompt,
-              }
-            : n
-        )
-      );
-      recordOperationLog("局部编辑完成", `已生成 ${storedImages.length} 张图片`, "success");
-    } catch (err: any) {
-      if (err.name === "AbortError") return;
-      console.error(err);
-      setNodes((prev) =>
-        prev.map((n) => (n.id === nextNodeId ? { ...n, status: "error", error: err.message || "编辑失败" } : n))
-      );
-      recordOperationLog("局部编辑失败", err.message || "编辑失败", "error");
-    } finally {
-      if (generationControllersRef.current.get(nextNodeId) === controller) {
-        generationControllersRef.current.delete(nextNodeId);
-      }
-    }
-  };
-
-  const handleCancelGeneration = (nodeId: string) => {
-    const node = nodes.find((item) => item.id === nodeId);
-    generationControllersRef.current.get(nodeId)?.abort();
-    generationControllersRef.current.delete(nodeId);
-
-    const isTemporaryEditOutput = nodes.some((node) => node.id === nodeId && node.type === "image" && node.status === "loading");
-    if (isTemporaryEditOutput) {
-      setNodes((prev) => prev.filter((node) => node.id !== nodeId));
-      setConnections((prev) => prev.filter((connection) => connection.fromId !== nodeId && connection.toId !== nodeId));
-      recordOperationLog("取消图像任务", "已取消局部编辑", "info");
-      return;
-    }
-
-    setNodes((prev) =>
-      prev.map((node) => (node.id === nodeId ? { ...node, status: "idle", error: undefined } : node))
-    );
-    recordOperationLog("取消图像任务", node?.type === "generator" ? "已取消生图任务" : "已取消图像任务", "info");
-  };
-
   const handleDeleteNode = (id: string) => {
     const node = nodes.find((item) => item.id === id);
     setNodes((prev) => prev.filter((n) => n.id !== id));
+    setConnections((prev) => prev.filter((connection) => connection.fromId !== id && connection.toId !== id));
     recordOperationLog("删除节点", node ? `${node.type} 节点` : "节点", "success");
   };
 

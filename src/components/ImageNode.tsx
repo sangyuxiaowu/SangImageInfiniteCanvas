@@ -1207,7 +1207,11 @@ export default function ImageNode({
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">模型质量 (Quality)</span>
                       <select
                         value={quality}
-                        onChange={(e: any) => setQuality(e.target.value)}
+                        onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                          const nextQuality = e.target.value as NonNullable<CanvasNode["quality"]>;
+                          setQuality(nextQuality);
+                          onUpdatePosition(node.id, { quality: nextQuality });
+                        }}
                         className="w-full p-2 rounded-xl bg-slate-900 border border-white/10 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500/30 cursor-pointer font-semibold"
                       >
                         <option value="auto">Auto (自动)</option>
@@ -1696,7 +1700,11 @@ export default function ImageNode({
                       <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">质量 (Quality)</span>
                       <select
                         value={quality}
-                        onChange={(e: any) => setQuality(e.target.value)}
+                        onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                          const nextQuality = e.target.value as NonNullable<CanvasNode["quality"]>;
+                          setQuality(nextQuality);
+                          onUpdatePosition(node.id, { quality: nextQuality });
+                        }}
                         className="w-full p-1.5 rounded-xl bg-slate-900 border border-white/10 text-[11px] text-slate-200 focus:outline-none cursor-pointer font-semibold"
                       >
                         <option value="auto">Auto (自动)</option>
