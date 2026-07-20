@@ -85,7 +85,7 @@ export default function Toolbar({
         className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-medium text-xs transition-all shadow-md shadow-indigo-600/30 cursor-pointer flex items-center gap-1.5"
       >
         <Sparkles className="w-4 h-4" />
-        <span>添加生图节点</span>
+        <span>生图</span>
       </button>
 
       {/* Add Editor Node */}
@@ -96,7 +96,7 @@ export default function Toolbar({
         className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-medium text-xs transition-all shadow-md shadow-emerald-600/30 cursor-pointer flex items-center gap-1.5"
       >
         <Sliders className="w-4 h-4" />
-        <span>添加修改节点</span>
+        <span>修改</span>
       </button>
 
       {/* Add Text Node */}
@@ -107,7 +107,7 @@ export default function Toolbar({
         className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 border border-white/10 font-medium text-xs transition-all cursor-pointer flex items-center gap-1.5"
       >
         <FileText className="w-4 h-4 text-indigo-400" />
-        <span>添加文本</span>
+        <span>文本</span>
       </button>
 
       {/* Upload Reference Image Node */}
@@ -118,7 +118,7 @@ export default function Toolbar({
         className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 border border-white/10 font-medium text-xs transition-all cursor-pointer flex items-center gap-1.5"
       >
         <Upload className="w-4 h-4 text-emerald-400" />
-        <span>上传参考图</span>
+        <span>参考图</span>
       </button>
 
       {/* Hidden File Input */}
