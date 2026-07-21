@@ -3,6 +3,7 @@ import {
   Sparkles,
   Eye,
   Plus,
+  Minus,
   Info,
   Move,
   Layers,
@@ -147,6 +148,7 @@ export default function App() {
   const [activeTool, setActiveTool] = useState<CanvasTool>("select");
   const [isSpacePressed, setIsSpacePressed] = useState(false);
   const [isCanvasUsageExpanded, setIsCanvasUsageExpanded] = useState(false);
+  const [isZoomMenuOpen, setIsZoomMenuOpen] = useState(false);
 
   // Canvas container ref for viewport measurements
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -893,6 +895,24 @@ export default function App() {
     }
   };
 
+  const applyZoom = (requestedZoom: number, focalPoint?: { x: number; y: number }) => {
+    const nextZoom = Math.min(Math.max(requestedZoom, 0.15), 3.0);
+    if (!containerRef.current) {
+      setZoom(nextZoom);
+      return;
+    }
+
+    const { clientWidth, clientHeight } = containerRef.current;
+    const focalX = focalPoint?.x ?? clientWidth / 2;
+    const focalY = focalPoint?.y ?? clientHeight / 2;
+    const canvasX = (focalX - panX) / zoom;
+    const canvasY = (focalY - panY) / zoom;
+
+    setZoom(nextZoom);
+    setPanX(focalX - canvasX * nextZoom);
+    setPanY(focalY - canvasY * nextZoom);
+  };
+
   // 5. Zoom Handler (Centered on cursor)
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
@@ -902,18 +922,9 @@ export default function App() {
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
-    // Canvas coordinates under mouse before zoom
-    const cx = (mouseX - panX) / zoom;
-    const cy = (mouseY - panY) / zoom;
-
     // Zoom multiplier
     const factor = e.deltaY < 0 ? 1.1 : 0.9;
-    const nextZoom = Math.min(Math.max(zoom * factor, 0.15), 3.0);
-
-    // Adjust pans so same canvas location stays under mouse
-    setZoom(nextZoom);
-    setPanX(mouseX - cx * nextZoom);
-    setPanY(mouseY - cy * nextZoom);
+    applyZoom(zoom * factor, { x: mouseX, y: mouseY });
   };
 
   // 6. Pan drag handlers (Middle click or Space+click or Hand Tool)
@@ -1357,12 +1368,62 @@ export default function App() {
         </div>
       )}
 
-      {/* 3. Zoom display in bottom right corner */}
-      <div className="fixed bottom-6 right-6 z-40 bg-slate-950/60 backdrop-blur-md border border-white/10 px-3 py-1.5 rounded-xl shadow-2xl flex items-center gap-2.5 font-mono text-xs font-semibold text-slate-300">
-        <span className="flex items-center gap-1">
-          <Eye className="w-3.5 h-3.5 text-indigo-400" />
-          <span>缩放: {Math.round(zoom * 100)}%</span>
-        </span>
+      {/* 3. Zoom controls in bottom right corner */}
+      <div className="fixed bottom-6 right-6 z-40 bg-slate-950/60 backdrop-blur-md border border-white/10 px-2 py-1.5 rounded-xl shadow-2xl flex items-center gap-1.5 font-mono text-xs font-semibold text-slate-300">
+        <div className="relative flex items-center gap-1.5">
+          {isZoomMenuOpen && (
+            <div className="absolute bottom-full right-0 mb-2 w-full rounded-lg border border-white/10 bg-slate-950/95 p-1.5 shadow-2xl backdrop-blur-xl">
+              <div className="flex flex-col gap-1">
+                {[25, 50, 75, 100, 125, 150, 200].map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => {
+                      applyZoom(value / 100);
+                      setIsZoomMenuOpen(false);
+                    }}
+                    className={`rounded-md px-1 py-1.5 text-[11px] transition-colors cursor-pointer ${
+                      Math.round(zoom * 100) === value
+                        ? "bg-indigo-500 text-white"
+                        : "text-slate-300 hover:bg-white/10 hover:text-white"
+                    }`}
+                  >
+                    {value}%
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        <button
+          type="button"
+          onClick={() => applyZoom(zoom - 0.1)}
+          disabled={zoom <= 0.15}
+          title="缩小"
+          className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-300 hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-35 transition-colors cursor-pointer"
+        >
+          <Minus className="w-3.5 h-3.5" />
+        </button>
+        <div>
+          <button
+            type="button"
+            onClick={() => setIsZoomMenuOpen((isOpen) => !isOpen)}
+            title="选择缩放比例"
+            aria-expanded={isZoomMenuOpen}
+            className="h-7 px-2 rounded-lg flex items-center text-slate-200 hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
+          >
+            <span>{Math.round(zoom * 100)}%</span>
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={() => applyZoom(zoom + 0.1)}
+          disabled={zoom >= 3}
+          title="放大"
+          className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-300 hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-35 transition-colors cursor-pointer"
+        >
+          <Plus className="w-3.5 h-3.5" />
+        </button>
+        </div>
         <div className="w-px h-3.5 bg-white/10" />
         <span>节点: {nodes.length}</span>
       </div>
