@@ -1026,7 +1026,7 @@ export default function ImageNode({
                       className="w-full py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:from-white/5 disabled:to-white/5 disabled:text-white/20 text-white font-bold text-xs transition-all shadow-md shadow-indigo-600/20 cursor-pointer flex items-center justify-center gap-1.5"
                     >
                       <Sparkles className="w-4 h-4" />
-                      <span>立即连线绘制 (Generate)</span>
+                      <span>生成绘制 (Generate)</span>
                     </button>
 
                     {node.imageUrl && node.type !== "generator" && (
@@ -1523,7 +1523,7 @@ export default function ImageNode({
                           ) : (
                             <>
                               <Sparkles className="w-3.5 h-3.5" />
-                              <span>连线修改 (Modify)</span>
+                              <span>生成修改 (Modify)</span>
                             </>
                           )}
                         </button>
