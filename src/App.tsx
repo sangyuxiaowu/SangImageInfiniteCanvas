@@ -4,6 +4,9 @@ import {
   Eye,
   Plus,
   Minus,
+  Share2,
+  Download,
+  Upload,
   Info,
   Move,
   Layers,
@@ -32,6 +35,9 @@ import Toolbar from "./components/Toolbar";
 import ImageNode from "./components/ImageNode";
 import { useImageGeneration } from "./hooks/useImageGeneration";
 import { recordOperationLog } from "./operationLogs";
+import { downloadBlob } from "./imageUtils";
+import { exportCanvasViewportPng } from "./canvasPngExport";
+import { exportCanvasProject, importCanvasProject } from "./canvasProjectTransfer";
 import packageMetadata from "../package.json";
 
 const isTemporaryImageUrl = (value?: string) => value?.startsWith("data:") || value?.startsWith("blob:") || false;
@@ -149,9 +155,11 @@ export default function App() {
   const [isSpacePressed, setIsSpacePressed] = useState(false);
   const [isCanvasUsageExpanded, setIsCanvasUsageExpanded] = useState(false);
   const [isZoomMenuOpen, setIsZoomMenuOpen] = useState(false);
+  const [isCanvasTransferInProgress, setIsCanvasTransferInProgress] = useState(false);
 
   // Canvas container ref for viewport measurements
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const canvasImportInputRef = useRef<HTMLInputElement | null>(null);
   const isPanningRef = useRef(false);
   const panStartRef = useRef({ x: 0, y: 0 });
 
@@ -528,6 +536,91 @@ export default function App() {
     canvasUsageRef.current = usage;
     setCanvasUsage(usage);
     recordOperationLog("另存为新项目", newProj.name, "success");
+  };
+
+  const getCanvasFileName = () => (currentProject?.name || "创意画布").replace(/[\\/:*?"<>|]/g, "-");
+
+  const getCurrentCanvasProject = (): CanvasProject => ({
+    id: currentProjectId || `canvas-${Date.now()}`,
+    name: currentProject?.name || "创意画布",
+    nodes: nodes.map(nodeForLocalStorage),
+    connections,
+    panX,
+    panY,
+    zoom,
+    usage: canvasUsageRef.current,
+    updatedAt: Date.now(),
+  });
+
+  const handleShareCanvas = async () => {
+    if (!containerRef.current || isCanvasTransferInProgress) return;
+    setIsCanvasTransferInProgress(true);
+    try {
+      await exportCanvasViewportPng({
+        nodes,
+        connections,
+        fileName: `${getCanvasFileName()}.png`,
+      });
+      recordOperationLog("分享画布", "已导出完整画布 PNG", "success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法导出画布图片。";
+      recordOperationLog("分享画布失败", message, "error");
+      window.alert(message);
+    } finally {
+      setIsCanvasTransferInProgress(false);
+    }
+  };
+
+  const handleExportCanvas = async () => {
+    if (isCanvasTransferInProgress) return;
+    setIsCanvasTransferInProgress(true);
+    try {
+      const archive = await exportCanvasProject(getCurrentCanvasProject());
+      downloadBlob(archive, `${getCanvasFileName()}.sangcanvas`);
+      recordOperationLog("导出画布", "已导出画布数据与关联图片", "success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法导出画布归档。";
+      recordOperationLog("导出画布失败", message, "error");
+      window.alert(message);
+    } finally {
+      setIsCanvasTransferInProgress(false);
+    }
+  };
+
+  const handleImportCanvas = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || isCanvasTransferInProgress) return;
+
+    setIsCanvasTransferInProgress(true);
+    try {
+      const importedProject = await importCanvasProject(file);
+      setProjects((previousProjects) => {
+        const updatedProjects = [...previousProjects, importedProject];
+        saveToLocalStorage("gpt_image_projects", updatedProjects.map((project) => ({
+          ...project,
+          nodes: project.nodes.map(nodeForLocalStorage),
+        })));
+        return updatedProjects;
+      });
+      setCurrentProjectId(importedProject.id);
+      localStorage.setItem("gpt_image_current_project_id", importedProject.id);
+      setNodes(importedProject.nodes);
+      setConnections(importedProject.connections);
+      setPanX(importedProject.panX);
+      setPanY(importedProject.panY);
+      setZoom(importedProject.zoom);
+      const usage = normalizeCanvasUsage(importedProject.usage);
+      canvasUsageRef.current = usage;
+      setCanvasUsage(usage);
+      recordOperationLog("导入画布", `已导入 ${importedProject.name}`, "success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法导入画布归档。";
+      recordOperationLog("导入画布失败", message, "error");
+      window.alert(message);
+    } finally {
+      setIsCanvasTransferInProgress(false);
+    }
   };
 
   // Connection Linking Modes States
@@ -1187,6 +1280,43 @@ export default function App() {
           </p>
         </div>
       </header>
+
+      <section className="absolute top-4 right-4 z-40 flex items-center gap-1.5 bg-slate-900/40 backdrop-blur-xl border border-white/10 p-1.5 rounded-xl shadow-2xl">
+        <button
+          type="button"
+          onClick={handleShareCanvas}
+          disabled={isCanvasTransferInProgress}
+          title="分享画布为 PNG"
+          className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-300 hover:bg-white/10 hover:text-white disabled:cursor-wait disabled:opacity-50 transition-colors cursor-pointer"
+        >
+          <Share2 className="w-4 h-4" />
+        </button>
+        <button
+          type="button"
+          onClick={handleExportCanvas}
+          disabled={isCanvasTransferInProgress}
+          title="导出画布归档 (.sangcanvas)"
+          className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-300 hover:bg-white/10 hover:text-white disabled:cursor-wait disabled:opacity-50 transition-colors cursor-pointer"
+        >
+          <Download className="w-4 h-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => canvasImportInputRef.current?.click()}
+          disabled={isCanvasTransferInProgress}
+          title="导入画布归档 (.sangcanvas)"
+          className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-300 hover:bg-white/10 hover:text-white disabled:cursor-wait disabled:opacity-50 transition-colors cursor-pointer"
+        >
+          <Upload className="w-4 h-4" />
+        </button>
+        <input
+          ref={canvasImportInputRef}
+          type="file"
+          accept=".sangcanvas,application/zip"
+          onChange={handleImportCanvas}
+          className="hidden"
+        />
+      </section>
 
       {/* 1.1 Project Management Sidebar Drawer */}
       {showProjectPanel && (

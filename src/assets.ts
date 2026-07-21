@@ -63,8 +63,12 @@ export async function saveImageAsset(source: string | Blob): Promise<string> {
 }
 
 export async function getImageAssetUrl(assetId: string): Promise<string | undefined> {
-  const asset = await runTransaction<StoredAsset | undefined>(ASSET_STORE_NAME, "readonly", (store) => store.get(assetId));
+  const asset = await getImageAsset(assetId);
   return asset ? URL.createObjectURL(asset.blob) : undefined;
+}
+
+export async function getImageAsset(assetId: string): Promise<StoredAsset | undefined> {
+  return runTransaction<StoredAsset | undefined>(ASSET_STORE_NAME, "readonly", (store) => store.get(assetId));
 }
 
 export async function listImageAssets(): Promise<ImageAssetSummary[]> {
@@ -93,11 +97,24 @@ export async function saveMaskAsset(sourceUrl: string): Promise<string> {
   return mask.id;
 }
 
-export async function getMaskAssetUrl(maskAssetId: string): Promise<string | undefined> {
-  const mask = await runTransaction<StoredAsset | undefined>(MASK_STORE_NAME, "readonly", (store) => store.get(maskAssetId));
-  if (mask) return URL.createObjectURL(mask.blob);
+export async function saveMaskBlob(blob: Blob): Promise<string> {
+  const mask: StoredAsset = {
+    id: `mask-${crypto.randomUUID()}`,
+    blob,
+    createdAt: Date.now(),
+  };
+  await runTransaction(MASK_STORE_NAME, "readwrite", (store) => store.put(mask));
+  return mask.id;
+}
 
-  // Compatibility with masks saved before the dedicated masks store was introduced.
-  const legacyMask = await runTransaction<StoredAsset | undefined>(ASSET_STORE_NAME, "readonly", (store) => store.get(maskAssetId));
-  return legacyMask ? URL.createObjectURL(legacyMask.blob) : undefined;
+export async function getMaskAsset(maskAssetId: string): Promise<StoredAsset | undefined> {
+  const mask = await runTransaction<StoredAsset | undefined>(MASK_STORE_NAME, "readonly", (store) => store.get(maskAssetId));
+  if (mask) return mask;
+  return runTransaction<StoredAsset | undefined>(ASSET_STORE_NAME, "readonly", (store) => store.get(maskAssetId));
+}
+
+export async function getMaskAssetUrl(maskAssetId: string): Promise<string | undefined> {
+  const mask = await getMaskAsset(maskAssetId);
+  if (mask) return URL.createObjectURL(mask.blob);
+  return undefined;
 }
