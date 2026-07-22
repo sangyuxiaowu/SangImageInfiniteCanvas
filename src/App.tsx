@@ -24,6 +24,7 @@ import {
   Images,
   ClipboardList,
   CircleDollarSign,
+  Pencil,
   X
 } from "lucide-react";
 import { CanvasNode, CanvasTool, AppConfig, ApiEndpoint, CanvasConnection, CanvasProject, CanvasUsage } from "./types";
@@ -194,6 +195,8 @@ export default function App() {
   const currentProject = projects.find((project) => project.id === currentProjectId);
   const [showProjectPanel, setShowProjectPanel] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
+  const [isRenamingProject, setIsRenamingProject] = useState(false);
+  const [projectNameDraft, setProjectNameDraft] = useState("");
   const [showBanner, setShowBanner] = useState(true);
   const [homeView, setHomeView] = useState<"home" | "settings" | "assets" | "logs">("home");
   const [returnProjectId, setReturnProjectId] = useState<string | null>(null);
@@ -486,6 +489,28 @@ export default function App() {
     canvasUsageRef.current = usage;
     setCanvasUsage(usage);
     recordOperationLog("打开项目", proj.name, "info");
+  };
+
+  const handleRenameCurrentProject = () => {
+    if (!currentProjectId) return;
+    const name = projectNameDraft.trim();
+    if (!name || name === currentProject?.name) {
+      setIsRenamingProject(false);
+      return;
+    }
+
+    setProjects((previousProjects) => {
+      const updatedProjects = previousProjects.map((project) => project.id === currentProjectId
+        ? { ...project, name, updatedAt: Date.now() }
+        : project);
+      saveToLocalStorage("gpt_image_projects", updatedProjects.map((project) => ({
+        ...project,
+        nodes: project.nodes.map(nodeForLocalStorage),
+      })));
+      return updatedProjects;
+    });
+    setIsRenamingProject(false);
+    recordOperationLog("重命名画布", name, "success");
   };
 
   const handleDeleteProject = (id: string, e: React.MouseEvent) => {
@@ -1275,9 +1300,43 @@ export default function App() {
               v{packageMetadata.version}
             </span>
           </h1>
-          <p className="text-[10px] text-slate-400">
-            {currentProject?.name || "创意画布"}
-          </p>
+          <div className="flex items-center gap-1">
+            {isRenamingProject ? (
+              <input
+                autoFocus
+                type="text"
+                value={projectNameDraft}
+                onChange={(event) => setProjectNameDraft(event.target.value)}
+                onBlur={handleRenameCurrentProject}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") handleRenameCurrentProject();
+                  if (event.key === "Escape") setIsRenamingProject(false);
+                }}
+                className="w-36 bg-transparent border-b border-indigo-400 px-0 py-0 text-[10px] text-slate-200 outline-none"
+                aria-label="画布名称"
+              />
+            ) : (
+              <>
+                <p className="text-[10px] text-slate-400">
+                  {currentProject?.name || "创意画布"}
+                </p>
+                {currentProject && (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setProjectNameDraft(currentProject.name);
+                      setIsRenamingProject(true);
+                    }}
+                    className="rounded p-0.5 text-slate-500 hover:bg-white/10 hover:text-slate-200"
+                    title="修改画布名称"
+                  >
+                    <Pencil className="w-2.5 h-2.5" />
+                  </button>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </header>
 
