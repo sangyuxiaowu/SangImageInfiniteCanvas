@@ -381,7 +381,7 @@ export default function ImageNode({
 
   const handleApplyEdit = async () => {
     const connectedTexts = incomingNodes.filter((n) => n.type === "text" && n.text?.trim());
-    const combinedPrompt = connectedTexts.map((n) => n.text!.trim()).join(", ");
+    const combinedPrompt = connectedTexts.map((n) => n.text!.trim()).join("\n");
 
     if (!combinedPrompt) {
       setEditError("请连线一个文本便签节点以提供修改指令 (Link a text node to provide instructions).");
@@ -695,7 +695,7 @@ export default function ImageNode({
   // ==================== BRANCH 3: GENERATOR (TEXT TO IMAGE) NODE ====================
   if (node.type === "generator") {
     const connectedTexts = incomingNodes.filter((n) => n.type === "text" && n.text?.trim());
-    const combinedPrompt = connectedTexts.map((n) => n.text!.trim()).join(", ") || node.prompt || "";
+    const combinedPrompt = connectedTexts.map((n) => n.text!.trim()).join("\n") || node.prompt || "";
 
     return (
       <div
@@ -1064,7 +1064,7 @@ export default function ImageNode({
   // ==================== BRANCH 4: EDITOR (IMAGE INPAINTING / EDIT) NODE ====================
   if (node.type === "editor") {
     const connectedTexts = incomingNodes.filter((n) => n.type === "text" && n.text?.trim());
-    const combinedPrompt = connectedTexts.map((n) => n.text!.trim()).join(", ");
+    const combinedPrompt = connectedTexts.map((n) => n.text!.trim()).join("\n");
 
     return (
       <div

@@ -681,7 +681,7 @@ export default function App() {
       const incomingNodes = prev
         .filter((connection) => connection.toId === toId)
         .map((connection) => nodes.find((node) => node.id === connection.fromId));
-      const sourceLimit = targetNode.type === "editor" || sourceNode.type === "text" ? 1 : Infinity;
+      const sourceLimit = targetNode.type === "editor" && sourceNode.type === "image" ? 1 : Infinity;
       const hasReachedLimit = incomingNodes.filter((node) => node?.type === sourceNode.type).length >= sourceLimit;
       if (hasReachedLimit) return prev;
 
