@@ -21,17 +21,44 @@ interface ImageGenerationDependencies {
   onUsageReceived: (response: unknown) => void;
 }
 
-function getRequestHeaders(endpoint: ApiEndpoint): Record<string, string> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (endpoint.apiKey) headers["x-api-key"] = endpoint.apiKey;
-  if (endpoint.baseUrl) headers["x-base-url"] = endpoint.baseUrl;
-  return headers;
+interface ImageApiResponse {
+  data?: Array<{ url?: string; b64_json?: string }>;
+  usage?: unknown;
 }
 
-async function getResponseData(response: Response) {
-  if (response.ok) return response.json();
-  const errorData = await response.json();
-  throw new Error(errorData.details || errorData.error || `Server error code ${response.status}`);
+function getApiUrl(endpoint: ApiEndpoint, path: string) {
+  if (!endpoint.baseUrl.trim()) throw new Error("请先在接入点设置中填写 Base URL。");
+  return `${endpoint.baseUrl.replace(/\/$/, "")}${path}`;
+}
+
+function getAuthorizationHeaders(endpoint: ApiEndpoint): Record<string, string> {
+  if (!endpoint.apiKey.trim()) throw new Error("请先在接入点设置中填写 API Key。");
+  return { Authorization: `Bearer ${endpoint.apiKey}` };
+}
+
+function base64ToBlob(value: string, defaultType = "image/png") {
+  const [header, encoded = ""] = value.split(",", 2);
+  const type = header.match(/^data:([^;]+);base64$/)?.[1] || defaultType;
+  const bytes = Uint8Array.from(atob(encoded || value), (character) => character.charCodeAt(0));
+  return new Blob([bytes], { type });
+}
+
+async function getResponseData(response: Response): Promise<ImageApiResponse> {
+  const body = await response.text();
+  let data: ImageApiResponse & { error?: string; details?: string };
+  try {
+    data = JSON.parse(body);
+  } catch {
+    const preview = body.replace(/\s+/g, " ").slice(0, 200);
+    throw new Error(`图像 API 返回了非 JSON 响应（HTTP ${response.status}）：${preview || response.statusText}`);
+  }
+  if (!response.ok) throw new Error(data.details || data.error || `图像 API 返回错误（HTTP ${response.status}）。`);
+  return {
+    ...data,
+    data: data.data?.map((item) => item.url || !item.b64_json
+      ? item
+      : { ...item, url: `data:image/png;base64,${item.b64_json}` }),
+  };
 }
 
 export function useImageGeneration({
@@ -63,17 +90,32 @@ export function useImageGeneration({
     recordOperationLog("开始生成图像", `模型：${options.model || generatorNode.model}`, "info");
 
     try {
-      const response = await fetch("/api/generate", {
+      const requestBody = {
+        prompt,
+        size: options.size,
+        model: options.model || "gpt-image-2",
+        quality: options.quality,
+        n: options.n,
+        output_format: "png",
+      };
+      const hasReferenceImage = Boolean(options.image);
+      let body: BodyInit;
+      let headers = getAuthorizationHeaders(endpoint);
+      if (hasReferenceImage) {
+        const formData = new FormData();
+        formData.append("image", base64ToBlob(options.image!), "reference.png");
+        Object.entries(requestBody).forEach(([key, value]) => {
+          if (value !== undefined) formData.append(key, String(value));
+        });
+        body = formData;
+      } else {
+        headers = { ...headers, "Content-Type": "application/json" };
+        body = JSON.stringify(requestBody);
+      }
+      const response = await fetch(getApiUrl(endpoint, `/images/${hasReferenceImage ? "edits" : "generations"}`), {
         method: "POST",
-        headers: getRequestHeaders(endpoint),
-        body: JSON.stringify({
-          prompt,
-          size: options.size,
-          model: options.model || "gpt-image-2",
-          quality: options.quality,
-          n: options.n,
-          image: options.image,
-        }),
+        headers,
+        body,
         signal: controller.signal,
       });
       const responseData = await getResponseData(response);
@@ -175,18 +217,19 @@ export function useImageGeneration({
     recordOperationLog("开始局部编辑", `模型：${options.model || parentNode.model}`, "info");
 
     try {
-      const response = await fetch("/api/edit", {
+      const formData = new FormData();
+      formData.append("image", base64ToBlob(originalImageBase64), "image.png");
+      if (maskBase64) formData.append("mask", base64ToBlob(maskBase64), "mask.png");
+      formData.append("prompt", prompt);
+      formData.append("model", options.model || parentNode.model || "gpt-image-2");
+      if (options.size) formData.append("size", options.size);
+      if (options.quality) formData.append("quality", options.quality);
+      if (options.n) formData.append("n", String(options.n));
+      formData.append("output_format", "png");
+      const response = await fetch(getApiUrl(endpoint, "/images/edits"), {
         method: "POST",
-        headers: getRequestHeaders(endpoint),
-        body: JSON.stringify({
-          image: originalImageBase64,
-          mask: maskBase64,
-          prompt,
-          size: options.size,
-          model: options.model || "gpt-image-2",
-          quality: options.quality,
-          n: options.n,
-        }),
+        headers: getAuthorizationHeaders(endpoint),
+        body: formData,
         signal: controller.signal,
       });
       const responseData = await getResponseData(response);

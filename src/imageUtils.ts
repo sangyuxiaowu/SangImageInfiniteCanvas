@@ -1,7 +1,5 @@
 export function getImageRequestSource(sourceUrl: string) {
-  return sourceUrl.startsWith("blob:") || sourceUrl.startsWith("data:")
-    ? sourceUrl
-    : `/api/proxy-image?url=${encodeURIComponent(sourceUrl)}`;
+  return sourceUrl;
 }
 
 export function downloadBlob(blob: Blob, fileName: string) {
@@ -40,7 +38,7 @@ export async function getCleanImageBase64(imageUrl: string): Promise<string> {
       context.drawImage(image, 0, 0, canvas.width, canvas.height);
       resolve(canvas.toDataURL("image/png"));
     };
-    image.onerror = () => reject(new Error("Failed to load original image via proxy."));
+    image.onerror = () => reject(new Error("无法加载原始图片。请确认图片地址允许跨域访问。"));
     image.src = getImageRequestSource(imageUrl);
   });
 }
