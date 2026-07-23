@@ -64,3 +64,8 @@ jobs:
           releaseBody: "See attached assets for installers."
           releaseDraft: false
           prerelease: false
+
+      - name: Inspect Tauri bundles
+        if: always()
+        shell: bash
+        run: find src-tauri/target -type f -path "*/bundle/*" -print
