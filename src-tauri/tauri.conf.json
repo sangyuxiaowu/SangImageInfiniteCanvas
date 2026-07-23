@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:3000",
     "beforeDevCommand": "npm run dev -- --mode tauri",
-    "beforeBuildCommand": "npm run prebuild:tauri && npm run build -- --mode tauri"
+    "beforeBuildCommand": "npm run prebuild:tauri && npx vite build --mode tauri"
   },
   "app": {
     "windows": [
