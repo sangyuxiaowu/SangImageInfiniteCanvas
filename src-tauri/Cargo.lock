@@ -2726,7 +2726,7 @@ dependencies = [
 
 [[package]]
 name = "sangimage"
-version = "1.6.5"
+version = "1.6.7"
 dependencies = [
  "tauri",
  "tauri-build",
