@@ -139,7 +139,7 @@ export function useImageGeneration({
           prompt,
           imageUrl,
           assetId,
-          isStandaloneImage: false,
+          isStandaloneImage: true,
           status: "idle",
           aspectRatio: generatorNode.aspectRatio,
           model: options.model || generatorNode.model,
@@ -247,6 +247,7 @@ export function useImageGeneration({
       setNodes((previousNodes) => previousNodes.map((node) => node.id === nextNodeId ? {
         ...node,
         status: "idle",
+        isStandaloneImage: true,
         imageUrl: storedImages[0].imageUrl,
         assetId: storedImages[0].assetId,
         assetIds: storedImages.map((image) => image.assetId),

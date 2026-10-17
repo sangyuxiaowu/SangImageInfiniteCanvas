@@ -653,9 +653,27 @@ export default function App() {
   const [connectionCursor, setConnectionCursor] = useState<{ x: number; y: number } | null>(null);
   const [connectionActionsFromId, setConnectionActionsFromId] = useState<string | null>(null);
 
+  const getNodePortPosition = (node: CanvasNode, side: "input" | "output") => {
+    const nodeElement = document.getElementById(`canvas-node-${node.id}`);
+    const canvasElement = containerRef.current;
+    if (!nodeElement || !canvasElement) {
+      return {
+        x: side === "output" ? node.x + node.width : node.x,
+        y: node.y + node.height / 2,
+      };
+    }
+
+    const nodeRect = nodeElement.getBoundingClientRect();
+    const canvasRect = canvasElement.getBoundingClientRect();
+    return {
+      x: ((side === "output" ? nodeRect.right : nodeRect.left) - canvasRect.left - panX) / zoom,
+      y: (nodeRect.top + nodeRect.height / 2 - canvasRect.top - panY) / zoom,
+    };
+  };
+
   const handleStartConnecting = (fromId: string, clientX?: number, clientY?: number) => {
     const sourceNode = nodes.find((node) => node.id === fromId);
-    if (sourceNode?.type === "image" && sourceNode.isStandaloneImage === false) return;
+    if (sourceNode?.type === "image" && !sourceNode.imageUrl && !sourceNode.assetId) return;
 
     setConnectionActionsFromId((previousId) => previousId === fromId ? null : fromId);
     setConnectingFromId(fromId);
@@ -690,7 +708,7 @@ export default function App() {
       !sourceNode
       || !targetNode
       || !["text", "image"].includes(sourceNode.type)
-      || (sourceNode.type === "image" && sourceNode.isStandaloneImage === false)
+      || (sourceNode.type === "image" && !sourceNode.imageUrl && !sourceNode.assetId)
       || !["generator", "editor"].includes(targetNode.type)
     ) {
       setConnectingFromId(null);
@@ -1711,13 +1729,10 @@ export default function App() {
               const toNode = nodes.find((n) => n.id === conn.toId);
               if (!fromNode || !toNode) return null;
 
-              // Calculate start coordinates (middle-right of source node)
-              const x1 = fromNode.x + fromNode.width;
-              const y1 = fromNode.y + fromNode.height / 2; // Middle-right side port
-
-              // Calculate end coordinates (middle-left input port)
-              const x2 = toNode.x;
-              const y2 = toNode.y + toNode.height / 2;
+              const sourcePort = getNodePortPosition(fromNode, "output");
+              const targetPort = getNodePortPosition(toNode, "input");
+              const { x: x1, y: y1 } = sourcePort;
+              const { x: x2, y: y2 } = targetPort;
               const sourceConnections = connections.filter((connection) => connection.fromId === conn.fromId);
               const connectionIndex = sourceConnections.findIndex((connection) => connection.id === conn.id);
               const horizontalDistance = Math.abs(x2 - x1);
@@ -1771,8 +1786,7 @@ export default function App() {
             {connectingFromId && connectionCursor && (() => {
               const sourceNode = nodes.find((node) => node.id === connectingFromId);
               if (!sourceNode) return null;
-              const x1 = sourceNode.x + sourceNode.width;
-              const y1 = sourceNode.y + sourceNode.height / 2;
+              const { x: x1, y: y1 } = getNodePortPosition(sourceNode, "output");
               const x2 = connectionCursor.x;
               const y2 = connectionCursor.y;
               return <path

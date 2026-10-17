@@ -671,7 +671,7 @@ export default function ImageNode({
         </div>
 
         {/* Only independent image assets may be connected to downstream nodes. */}
-        {node.isStandaloneImage !== false && (
+        {(node.isStandaloneImage !== false || Boolean(node.imageUrl || node.assetId)) && (
           <div className="absolute top-1/2 -right-1.5 -translate-y-1/2 z-50 no-drag">
           <button
             onPointerDown={(event) => {
@@ -686,6 +686,11 @@ export default function ImageNode({
             }`}
             title="拉出连线关联到修改或生图节点 (Drag/Click to connect)"
           />
+          </div>
+        )}
+        {incomingNodes.length > 0 && (
+          <div className="absolute top-1/2 -left-1.5 -translate-y-1/2 z-50 no-drag pointer-events-none">
+            <div className="w-3 h-3 rounded-full border-2 border-indigo-300 bg-slate-950 shadow-[0_0_0_3px_rgba(99,102,241,0.3)]" />
           </div>
         )}
       </div>
