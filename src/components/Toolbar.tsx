@@ -1,6 +1,7 @@
 import React, { useRef } from "react";
 import { MousePointer, Hand, PlusSquare, RotateCcw, Trash2, HelpCircle, FileText, Upload, Sliders, Sparkles } from "lucide-react";
 import { CanvasTool } from "../types";
+import { recordOperationLog } from "../operationLogs";
 
 interface ToolbarProps {
   activeTool: CanvasTool;
@@ -10,7 +11,7 @@ interface ToolbarProps {
   onAddGeneratorNode: () => void;
   onAddEditorNode: () => void;
   onAddTextNode: () => void;
-  onUploadImageNode: (base64Url: string) => void;
+  onUploadImageNode: (source: string | Blob) => Promise<void>;
 }
 
 export default function Toolbar({
@@ -25,20 +26,18 @@ export default function Toolbar({
 }: ToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const result = event.target?.result as string;
-      if (result) {
-        onUploadImageNode(result);
-      }
-    };
-    reader.readAsDataURL(file);
-    // Reset file value to allow uploading same image
-    e.target.value = "";
+    try {
+      await onUploadImageNode(file);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法读取图片文件。";
+      recordOperationLog("上传参考图失败", message, "error");
+      window.alert(`上传参考图失败：${message}`);
+    }
   };
 
   const handleUploadClick = () => {
@@ -171,4 +170,3 @@ export default function Toolbar({
     </div>
   );
 }
-

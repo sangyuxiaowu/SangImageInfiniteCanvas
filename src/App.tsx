@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo, useLayoutEffect } from "react";
 import {
   Sparkles,
   Eye,
@@ -35,6 +35,10 @@ import OperationLogPage from "./components/OperationLogPage";
 import Toolbar from "./components/Toolbar";
 import ImageNode from "./components/ImageNode";
 import { useImageGeneration } from "./hooks/useImageGeneration";
+import { useLatestCallback } from "./hooks/useLatestCallback";
+import { useFrameCallback } from "./hooks/useFrameCallback";
+import { useCanvasNodeSizes } from "./hooks/useCanvasNodeSizes";
+import { useDebouncedSave } from "./hooks/useDebouncedSave";
 import { recordOperationLog } from "./operationLogs";
 import { downloadBlob } from "./imageUtils";
 import { exportCanvasViewportPng } from "./canvasPngExport";
@@ -318,12 +322,13 @@ export default function App() {
   });
 
   const assetObjectUrlsRef = useRef(new Set<string>());
+  const assetHydrationKey = JSON.stringify(nodes
+    .filter((node) => (node.assetId && !node.imageUrl) || (node.assetIds?.length && !node.imageUrls))
+    .map(({ id, assetId, assetIds }) => ({ id, assetId, assetIds })));
 
   useEffect(() => {
     let cancelled = false;
-    const nodesToHydrate = nodes.filter((node) =>
-      (node.assetId && !node.imageUrl) || (node.assetIds?.length && !node.imageUrls)
-    );
+    const nodesToHydrate: Pick<CanvasNode, "id" | "assetId" | "assetIds">[] = JSON.parse(assetHydrationKey);
     if (!nodesToHydrate.length) return;
 
     Promise.all(nodesToHydrate.map(async (node) => {
@@ -331,25 +336,34 @@ export default function App() {
       const imageUrls = (await Promise.all(assetIds.map(getImageAssetUrl))).filter((url): url is string => Boolean(url));
       return { id: node.id, imageUrls, imageUrl: imageUrls[0] };
     })).then((hydratedNodes) => {
-      if (cancelled) return;
       hydratedNodes.forEach((node) => {
-        if (node.imageUrl) assetObjectUrlsRef.current.add(node.imageUrl);
+        node.imageUrls.forEach((url) => {
+          if (cancelled) URL.revokeObjectURL(url);
+          else assetObjectUrlsRef.current.add(url);
+        });
       });
-      setNodes((previousNodes) => previousNodes.map((node) => {
-        const hydratedNode = hydratedNodes.find((item) => item.id === node.id);
-        if (!hydratedNode?.imageUrl) return node;
-        return {
-          ...node,
-          imageUrl: node.imageUrl || hydratedNode.imageUrl,
-          imageUrls: node.imageUrls || (node.assetIds ? hydratedNode.imageUrls : node.imageUrls),
-        };
-      }));
+      if (cancelled) return;
+      const byId = new Map(hydratedNodes.map((node) => [node.id, node]));
+      setNodes((previousNodes) => {
+        let changed = false;
+        const restored = previousNodes.map((node) => {
+          const hydratedNode = byId.get(node.id);
+          if (!hydratedNode?.imageUrl || (node.imageUrl && (!node.assetIds || node.imageUrls))) return node;
+          changed = true;
+          return {
+            ...node,
+            imageUrl: node.imageUrl || hydratedNode.imageUrl,
+            imageUrls: node.imageUrls || (node.assetIds ? hydratedNode.imageUrls : node.imageUrls),
+          };
+        });
+        return changed ? restored : previousNodes;
+      });
     }).catch((error) => console.warn("Unable to restore locally stored image assets.", error));
 
     return () => {
       cancelled = true;
     };
-  }, [nodes]);
+  }, [assetHydrationKey]);
 
   useEffect(() => () => {
     assetObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
@@ -377,7 +391,7 @@ export default function App() {
     return [];
   });
 
-  const { generateImage: handleGenerateImage, generateEdit: handleGenerateEdit, cancelGeneration: handleCancelGeneration } = useImageGeneration({
+  const { generateImage, generateEdit, cancelGeneration } = useImageGeneration({
     nodes,
     config,
     defaultEndpoint: defaultEndpointConfig,
@@ -386,27 +400,29 @@ export default function App() {
     assetObjectUrlsRef,
     onUsageReceived: addCanvasUsage,
   });
+  const handleGenerateImage = useLatestCallback(generateImage);
+  const handleGenerateEdit = useLatestCallback(generateEdit);
+  const handleCancelGeneration = useLatestCallback(cancelGeneration);
 
-  // Saving state changes to local storage (only if NOT running in active project mode)
-  useEffect(() => {
+  useDebouncedSave(() => {
     if (!currentProjectId) {
       saveToLocalStorage("gpt_image_nodes", nodes.map(nodeForLocalStorage));
+      saveToLocalStorage("gpt_image_connections", connections);
     }
-  }, [nodes, currentProjectId]);
+    saveToLocalStorage("gpt_image_projects", projects.map((project) => ({
+      ...project,
+      ...(project.id === currentProjectId ? { nodes, connections, panX, panY, zoom } : {}),
+      nodes: (project.id === currentProjectId ? nodes : project.nodes).map(nodeForLocalStorage),
+    })));
+  }, [nodes, connections, panX, panY, zoom, currentProjectId, projects]);
 
-  useEffect(() => {
-    if (!currentProjectId) {
-      localStorage.setItem("gpt_image_connections", JSON.stringify(connections));
-    }
-  }, [connections, currentProjectId]);
-
-  // Auto-save project edits
-  useEffect(() => {
+  // Keep project switching immediate; serialize only after interaction settles.
+  useLayoutEffect(() => {
     if (currentProjectId && projects.length > 0) {
       const activeProj = projects.find((p) => p.id === currentProjectId);
       if (activeProj) {
-        const hasNodesChanged = JSON.stringify(activeProj.nodes) !== JSON.stringify(nodes);
-        const hasConnsChanged = JSON.stringify(activeProj.connections) !== JSON.stringify(connections);
+        const hasNodesChanged = activeProj.nodes !== nodes;
+        const hasConnsChanged = activeProj.connections !== connections;
         const hasPanChanged = activeProj.panX !== panX || activeProj.panY !== panY;
         const hasZoomChanged = activeProj.zoom !== zoom;
 
@@ -426,10 +442,6 @@ export default function App() {
               }
               return p;
             });
-            saveToLocalStorage("gpt_image_projects", updated.map((project) => ({
-              ...project,
-              nodes: project.nodes.map(nodeForLocalStorage),
-            })));
             return updated;
           });
         }
@@ -652,26 +664,36 @@ export default function App() {
   const [connectingFromId, setConnectingFromId] = useState<string | null>(null);
   const [connectionCursor, setConnectionCursor] = useState<{ x: number; y: number } | null>(null);
   const [connectionActionsFromId, setConnectionActionsFromId] = useState<string | null>(null);
+  const nodeIds = JSON.stringify(nodes.map((node) => node.id));
+  const nodeSizes = useCanvasNodeSizes(nodeIds, currentProjectId);
+  const graph = useMemo(() => {
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const incoming = new Map<string, CanvasNode[]>();
+    const outgoing = new Map<string, CanvasNode[]>();
+    const wireIndexes = new Map<string, number>();
+    for (const connection of connections) {
+      const source = byId.get(connection.fromId);
+      const target = byId.get(connection.toId);
+      const inputs = incoming.get(connection.toId) || [];
+      const outputs = outgoing.get(connection.fromId) || [];
+      wireIndexes.set(connection.id, outputs.length);
+      if (source) inputs.push(source);
+      if (target) outputs.push(target);
+      incoming.set(connection.toId, inputs);
+      outgoing.set(connection.fromId, outputs);
+    }
+    return { byId, incoming, outgoing, wireIndexes };
+  }, [nodes, connections]);
 
   const getNodePortPosition = (node: CanvasNode, side: "input" | "output") => {
-    const nodeElement = document.getElementById(`canvas-node-${node.id}`);
-    const canvasElement = containerRef.current;
-    if (!nodeElement || !canvasElement) {
-      return {
-        x: side === "output" ? node.x + node.width : node.x,
-        y: node.y + node.height / 2,
-      };
-    }
-
-    const nodeRect = nodeElement.getBoundingClientRect();
-    const canvasRect = canvasElement.getBoundingClientRect();
+    const size = nodeSizes.get(`canvas-node-${node.id}`);
     return {
-      x: ((side === "output" ? nodeRect.right : nodeRect.left) - canvasRect.left - panX) / zoom,
-      y: (nodeRect.top + nodeRect.height / 2 - canvasRect.top - panY) / zoom,
+      x: node.x + (side === "output" ? size?.width ?? node.width : 0),
+      y: node.y + (size?.height ?? node.height) / 2,
     };
   };
 
-  const handleStartConnecting = (fromId: string, clientX?: number, clientY?: number) => {
+  const handleStartConnecting = useLatestCallback((fromId: string, clientX?: number, clientY?: number) => {
     const sourceNode = nodes.find((node) => node.id === fromId);
     if (sourceNode?.type === "image" && !sourceNode.imageUrl && !sourceNode.assetId) return;
 
@@ -682,9 +704,10 @@ export default function App() {
       setConnectionCursor({ x: (clientX - rect.left - panX) / zoom, y: (clientY - rect.top - panY) / zoom });
 
       const handlePointerMove = (event: PointerEvent) => {
-        setConnectionCursor({ x: (event.clientX - rect.left - panX) / zoom, y: (event.clientY - rect.top - panY) / zoom });
+        scheduleConnectionCursor({ x: (event.clientX - rect.left - panX) / zoom, y: (event.clientY - rect.top - panY) / zoom });
       };
       const handlePointerUp = () => {
+        flushConnectionCursor();
         setConnectingFromId(null);
         setConnectionCursor(null);
         document.removeEventListener("pointermove", handlePointerMove);
@@ -692,9 +715,10 @@ export default function App() {
       document.addEventListener("pointermove", handlePointerMove);
       document.addEventListener("pointerup", handlePointerUp, { once: true });
     }
-  };
+  });
+  const { schedule: scheduleConnectionCursor, flush: flushConnectionCursor } = useFrameCallback(setConnectionCursor);
 
-  const handleCompleteConnecting = (toId: string) => {
+  const handleCompleteConnecting = useLatestCallback((toId: string) => {
     if (!connectingFromId || connectingFromId === toId) {
       setConnectingFromId(null);
       setConnectionCursor(null);
@@ -716,7 +740,6 @@ export default function App() {
       setConnectionActionsFromId(null);
       return;
     }
-
     setConnections((prev) => {
       const exists = prev.some((c) => c.fromId === connectingFromId && c.toId === toId);
       if (exists) return prev;
@@ -734,7 +757,7 @@ export default function App() {
     setConnectingFromId(null);
     setConnectionCursor(null);
     setConnectionActionsFromId(null);
-  };
+  });
 
   const handleRemoveConnection = (connectionId: string) => {
     setConnections((prev) => prev.filter((connection) => connection.id !== connectionId));
@@ -743,6 +766,7 @@ export default function App() {
   // 4. Hotkeys Setup (V: Select, H: Pan, Space: Temporary Pan, R: Recenter)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       const activeEl = document.activeElement;
       // Ignore shortcut hotkeys if the user is typing in an input or textarea
       if (
@@ -878,7 +902,7 @@ export default function App() {
       const offset = (nodes.length % 8) * 30;
 
       const newNode: CanvasNode = {
-        id: `node-text-${Date.now()}`,
+        id: `node-text-${crypto.randomUUID()}`,
         type: "text",
         x: Math.round(cx - 150) + offset,
         y: Math.round(cy - 120) + offset,
@@ -898,19 +922,26 @@ export default function App() {
   };
 
   // Add a reference image node from upload
-  const handleUploadImageNode = async (base64Url: string) => {
+  const isCurrentProject = useLatestCallback((projectId: string | null) => currentProjectId === projectId);
+  const handleUploadImageNode = useLatestCallback(async (source: string | Blob) => {
     if (containerRef.current) {
-      const assetId = await saveImageAsset(base64Url);
-      const imageUrl = await getImageAssetUrl(assetId);
-      if (!imageUrl) throw new Error("Unable to load the uploaded image asset.");
-      assetObjectUrlsRef.current.add(imageUrl);
+      const projectId = currentProjectId;
       const { clientWidth, clientHeight } = containerRef.current;
       const cx = (clientWidth / 2 - panX) / zoom;
       const cy = (clientHeight / 2 - panY) / zoom;
+      const assetId = await saveImageAsset(source);
+      const imageUrl = await getImageAssetUrl(assetId);
+      if (!imageUrl) throw new Error("Unable to load the uploaded image asset.");
+      if (!isCurrentProject(projectId)) {
+        URL.revokeObjectURL(imageUrl);
+        recordOperationLog("取消添加图片", "目标画布已切换，图片已保存在本地资产中", "info");
+        return;
+      }
+      assetObjectUrlsRef.current.add(imageUrl);
       const offset = (nodes.length % 8) * 30;
 
       const newNode: CanvasNode = {
-        id: `node-img-${Date.now()}`,
+        id: `node-img-${crypto.randomUUID()}`,
         type: "image",
         x: Math.round(cx - 200) + offset,
         y: Math.round(cy - 210) + offset,
@@ -929,38 +960,53 @@ export default function App() {
       setNodes((prev) => [...prev, newNode]);
   recordOperationLog("上传参考图", "已添加图片节点", "success");
     }
-  };
+  });
 
-  const handleCanvasPaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
-    const target = event.target as HTMLElement;
-    if (target.closest("input, textarea, [contenteditable='true']")) return;
+  const handleCanvasPaste = useLatestCallback((event: ClipboardEvent) => {
+    if (!currentProjectId || event.defaultPrevented || !event.clipboardData) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest(
+      "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='textbox']"
+    )) return;
 
-    const clipboardItems = Array.from(event.clipboardData.items as ArrayLike<DataTransferItem>);
-    const imageItem = clipboardItems.find((item) => item.type.startsWith("image/"));
-    if (imageItem) {
-      const imageFile = imageItem.getAsFile();
-      if (!imageFile) return;
-
-      event.preventDefault();
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (typeof reader.result === "string") {
-          void handleUploadImageNode(reader.result);
-        }
-      };
-      reader.readAsDataURL(imageFile);
-      return;
+    const clipboard = event.clipboardData;
+    let images = Array.from(clipboard.files).filter((file) => file.type.startsWith("image/"));
+    if (!images.length) {
+      images = Array.from(clipboard.items)
+        .filter((item) => item.type.startsWith("image/"))
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => file !== null);
     }
-
-    const text = event.clipboardData.getData("text/plain").trim();
-    if (text) {
+    if (images.length) {
+      event.preventDefault();
+      void (async () => {
+        const projectId = currentProjectId;
+        try {
+          for (const image of images) {
+            if (!isCurrentProject(projectId)) break;
+            await handleUploadImageNode(image);
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "无法读取剪贴板图片。";
+          recordOperationLog("粘贴图片失败", message, "error");
+          window.alert(`粘贴图片失败：${message}`);
+        }
+      })();
+    } else {
+      const text = clipboard.getData("text/plain");
+      if (!text.trim()) return;
       event.preventDefault();
       handleAddTextNode(text);
     }
-  };
+  });
+
+  useEffect(() => {
+    window.addEventListener("paste", handleCanvasPaste);
+    return () => window.removeEventListener("paste", handleCanvasPaste);
+  }, [handleCanvasPaste]);
 
   // Embedded file upload inside generator node: places an image node right next to it and connects
-  const handleUploadReferenceImage = async (generatorId: string, base64Url: string) => {
+  const handleUploadReferenceImage = useLatestCallback(async (generatorId: string, base64Url: string) => {
     const generatorNode = nodes.find((n) => n.id === generatorId);
     if (!generatorNode) return;
 
@@ -993,7 +1039,7 @@ export default function App() {
       { id: `conn-${Date.now()}`, fromId: newImgId, toId: generatorId },
     ]);
     recordOperationLog("上传参考图", "已添加并连接到生图节点", "success");
-  };
+  });
 
   // Double Click empty canvas to spawn node at mouse position
   const handleDoubleClickCanvas = (e: React.MouseEvent) => {
@@ -1031,7 +1077,7 @@ export default function App() {
     }
   };
 
-  const applyZoom = (requestedZoom: number, focalPoint?: { x: number; y: number }) => {
+  const applyZoom = useLatestCallback((requestedZoom: number, focalPoint?: { x: number; y: number }) => {
     const nextZoom = Math.min(Math.max(requestedZoom, 0.15), 3.0);
     if (!containerRef.current) {
       setZoom(nextZoom);
@@ -1047,10 +1093,14 @@ export default function App() {
     setZoom(nextZoom);
     setPanX(focalX - canvasX * nextZoom);
     setPanY(focalY - canvasY * nextZoom);
-  };
+  });
 
-  // 5. Zoom Handler (Centered on cursor)
-  const handleWheel = (e: React.WheelEvent) => {
+  const wheelFactorRef = useRef(1);
+  const { schedule: scheduleWheel } = useFrameCallback((x: number, y: number) => {
+    applyZoom(zoom * wheelFactorRef.current, { x, y });
+    wheelFactorRef.current = 1;
+  });
+  const handleWheel = useLatestCallback((e: WheelEvent) => {
     e.preventDefault();
     if (!containerRef.current) return;
 
@@ -1059,9 +1109,15 @@ export default function App() {
     const mouseY = e.clientY - rect.top;
 
     // Zoom multiplier
-    const factor = e.deltaY < 0 ? 1.1 : 0.9;
-    applyZoom(zoom * factor, { x: mouseX, y: mouseY });
-  };
+    if (!e.deltaY) return;
+    wheelFactorRef.current *= e.deltaY < 0 ? 1.1 : 0.9;
+    scheduleWheel(mouseX, mouseY);
+  });
+  useEffect(() => {
+    const container = containerRef.current;
+    container?.addEventListener("wheel", handleWheel, { passive: false });
+    return () => container?.removeEventListener("wheel", handleWheel);
+  }, [handleWheel, currentProjectId]);
 
   // 6. Pan drag handlers (Middle click or Space+click or Hand Tool)
   const handleMouseDownCanvas = (e: React.MouseEvent) => {
@@ -1069,7 +1125,7 @@ export default function App() {
     const isHandMode = activeTool === "pan" || isSpacePressed;
     const isLeftClickOnBackground = e.button === 0 && (e.target as HTMLElement).id === "infinite-grid-viewport";
 
-    if (isMiddleClick || isHandMode || isLeftClickOnBackground) {
+    if (isMiddleClick || (e.button === 0 && isHandMode) || isLeftClickOnBackground) {
       e.preventDefault();
       isPanningRef.current = true;
       panStartRef.current = { x: e.clientX - panX, y: e.clientY - panY };
@@ -1078,26 +1134,43 @@ export default function App() {
     }
   };
 
-  const handleMouseMoveCanvas = (e: MouseEvent) => {
+  const { schedule: schedulePan, flush: flushPan } = useFrameCallback((x: number, y: number) => {
+    setPanX(x);
+    setPanY(y);
+  });
+  const handleMouseMoveCanvas = useLatestCallback((e: MouseEvent) => {
     if (!isPanningRef.current) return;
-    setPanX(e.clientX - panStartRef.current.x);
-    setPanY(e.clientY - panStartRef.current.y);
-  };
+    schedulePan(e.clientX - panStartRef.current.x, e.clientY - panStartRef.current.y);
+  });
 
-  const handleMouseUpCanvas = () => {
+  const handleMouseUpCanvas = useLatestCallback((event?: MouseEvent) => {
+    if (event && isPanningRef.current) handleMouseMoveCanvas(event);
+    flushPan();
     isPanningRef.current = false;
     document.removeEventListener("mousemove", handleMouseMoveCanvas);
     document.removeEventListener("mouseup", handleMouseUpCanvas);
-  };
+  });
+  useEffect(() => {
+    const handleBlur = () => {
+      handleMouseUpCanvas();
+      setIsSpacePressed(false);
+    };
+    window.addEventListener("blur", handleBlur);
+    return () => {
+      window.removeEventListener("blur", handleBlur);
+      document.removeEventListener("mousemove", handleMouseMoveCanvas);
+      document.removeEventListener("mouseup", handleMouseUpCanvas);
+    };
+  }, [handleMouseMoveCanvas, handleMouseUpCanvas]);
 
-  const handleDeleteNode = (id: string) => {
+  const handleDeleteNode = useLatestCallback((id: string) => {
     const node = nodes.find((item) => item.id === id);
     setNodes((prev) => prev.filter((n) => n.id !== id));
     setConnections((prev) => prev.filter((connection) => connection.fromId !== id && connection.toId !== id));
     recordOperationLog("删除节点", node ? `${node.type} 节点` : "节点", "success");
-  };
+  });
 
-  const handleDuplicateNode = (id: string) => {
+  const handleDuplicateNode = useLatestCallback((id: string) => {
     setNodes((prev) => {
       const node = prev.find((item) => item.id === id);
       if (!node) return prev;
@@ -1115,9 +1188,9 @@ export default function App() {
       return [...prev, duplicate];
     });
     recordOperationLog("复制节点", "已创建节点副本", "success");
-  };
+  });
 
-  const handleCreateStandaloneImage = async (sourceNodeId: string, imageBlob: Blob) => {
+  const handleCreateStandaloneImage = useLatestCallback(async (sourceNodeId: string, imageBlob: Blob) => {
     const sourceNode = nodes.find((node) => node.id === sourceNodeId);
     if (!sourceNode) return;
 
@@ -1144,11 +1217,19 @@ export default function App() {
       createdAt,
     };
     setNodes((prev) => [...prev, newNode]);
-  };
+  });
 
-  const handleUpdateNodePosition = (id: string, updates: Partial<CanvasNode>) => {
-    setNodes((prev) => prev.map((n) => (n.id === id ? { ...n, ...updates } : n)));
-  };
+  const handleUpdateNodePosition = useLatestCallback((id: string, updates: Partial<CanvasNode>) => {
+    setNodes((previous) => {
+      let changed = false;
+      const updated = previous.map((node) => {
+        if (node.id !== id || Object.entries(updates).every(([key, value]) => node[key as keyof CanvasNode] === value)) return node;
+        changed = true;
+        return { ...node, ...updates };
+      });
+      return changed ? updated : previous;
+    });
+  });
 
   if (!currentProjectId && homeView === "settings") {
     return <SettingsPanel config={config} onChangeConfig={handleUpdateConfig} onBack={returnToPreviousView} />;
@@ -1675,10 +1756,8 @@ export default function App() {
         id="infinite-grid-viewport"
         ref={containerRef}
         tabIndex={0}
-        onWheel={handleWheel}
         onMouseDown={handleMouseDownCanvas}
         onDoubleClick={handleDoubleClickCanvas}
-        onPaste={handleCanvasPaste}
         className={`flex-1 relative overflow-hidden select-none outline-none ${
           isSpacePressed || activeTool === "pan"
             ? isPanningRef.current
@@ -1725,16 +1804,15 @@ export default function App() {
               }
             `}</style>
             {connections.map((conn) => {
-              const fromNode = nodes.find((n) => n.id === conn.fromId);
-              const toNode = nodes.find((n) => n.id === conn.toId);
+              const fromNode = graph.byId.get(conn.fromId);
+              const toNode = graph.byId.get(conn.toId);
               if (!fromNode || !toNode) return null;
 
               const sourcePort = getNodePortPosition(fromNode, "output");
               const targetPort = getNodePortPosition(toNode, "input");
               const { x: x1, y: y1 } = sourcePort;
               const { x: x2, y: y2 } = targetPort;
-              const sourceConnections = connections.filter((connection) => connection.fromId === conn.fromId);
-              const connectionIndex = sourceConnections.findIndex((connection) => connection.id === conn.id);
+              const connectionIndex = graph.wireIndexes.get(conn.id) || 0;
               const horizontalDistance = Math.abs(x2 - x1);
               const controlDistance = 50 + connectionIndex * 28;
               const curveProgress = Math.min(0.36, controlDistance / Math.max(horizontalDistance, 120));
@@ -1784,7 +1862,7 @@ export default function App() {
               );
             })}
             {connectingFromId && connectionCursor && (() => {
-              const sourceNode = nodes.find((node) => node.id === connectingFromId);
+              const sourceNode = graph.byId.get(connectingFromId);
               if (!sourceNode) return null;
               const { x: x1, y: y1 } = getNodePortPosition(sourceNode, "output");
               const x2 = connectionCursor.x;
@@ -1801,14 +1879,10 @@ export default function App() {
           </svg>
 
           {nodes.map((node) => {
-            const parentEditor = connections
-              .filter((connection) => connection.toId === node.id)
-              .map((connection) => nodes.find((candidate) => candidate.id === connection.fromId))
+            const parentEditor = (graph.incoming.get(node.id) || [])
               .find((candidate) => candidate?.type === "editor");
             const parentInputImageUrl = parentEditor
-              ? connections
-                .filter((connection) => connection.toId === parentEditor.id)
-                .map((connection) => nodes.find((candidate) => candidate.id === connection.fromId))
+              ? (graph.incoming.get(parentEditor.id) || [])
                 .find((candidate) => candidate?.type === "image")?.imageUrl
               : undefined;
 
@@ -1831,8 +1905,8 @@ export default function App() {
                 connectingFromId={connectingFromId}
                 onStartConnecting={handleStartConnecting}
                 onCompleteConnecting={handleCompleteConnecting}
-                connectedToNodes={connections.filter(c => c.fromId === node.id).map(c => nodes.find(n => n.id === c.toId)).filter(Boolean) as CanvasNode[]}
-                incomingNodes={connections.filter(c => c.toId === node.id).map(c => nodes.find(n => n.id === c.fromId)).filter(Boolean) as CanvasNode[]}
+                connectedToNodes={graph.outgoing.get(node.id) || []}
+                incomingNodes={graph.incoming.get(node.id) || []}
                 onUploadReferenceImage={handleUploadReferenceImage}
                 endpoints={config.endpoints}
                 />
