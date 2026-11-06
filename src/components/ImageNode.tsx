@@ -24,6 +24,8 @@ import { ApiEndpoint, CanvasAspectRatio, CanvasNode, IMAGE_SIZE_BY_ASPECT_RATIO 
 import { getImageAssetUrl, getMaskAssetUrl, saveMaskAsset } from "../assets";
 import { createCompositedEditBlob, downloadBlob, getCleanImageBase64, getImageRequestSource } from "../imageUtils";
 import TextNode from "./TextNode";
+import { useFrameCallback } from "../hooks/useFrameCallback";
+import { useLatestCallback } from "../hooks/useLatestCallback";
 
 interface ImageNodeProps {
   node: CanvasNode;
@@ -54,7 +56,7 @@ interface ImageNodeProps {
   endpoints: ApiEndpoint[];
 }
 
-export default function ImageNode({
+function ImageNode({
   node,
   activeTool,
   zoom,
@@ -180,17 +182,11 @@ export default function ImageNode({
 
   const handleMouseDown = (e: React.MouseEvent) => {
     // Only drag with select tool and from header/background, not from buttons/inputs
-    if (activeTool !== "select") return;
+    if (activeTool !== "select" || e.button !== 0) return;
     if (isEditing) return; // Disable dragging when painting mask
 
-    const target = e.target as HTMLElement;
-    if (
-      target.tagName === "INPUT" ||
-      target.tagName === "TEXTAREA" ||
-      target.tagName === "BUTTON" ||
-      target.tagName === "SELECT" ||
-      target.closest(".no-drag")
-    ) {
+    const target = e.target as Element;
+    if (target.closest("input, textarea, button, select, [contenteditable], .no-drag")) {
       return;
     }
 
@@ -206,25 +202,37 @@ export default function ImageNode({
 
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("blur", handleDragBlur);
   };
 
-  const handleMouseMove = (e: MouseEvent) => {
+  const { schedule: schedulePosition, flush: flushPosition } = useFrameCallback((x: number, y: number) => {
+    onUpdatePosition(node.id, { x, y });
+  });
+  const handleMouseMove = useLatestCallback((e: MouseEvent) => {
     if (!dragStartRef.current) return;
     const dx = (e.clientX - dragStartRef.current.startX) / zoom;
     const dy = (e.clientY - dragStartRef.current.startY) / zoom;
     
-    // Smooth moving based on grid or directly
-    onUpdatePosition(node.id, {
-      x: Math.round(dragStartRef.current.nodeX + dx),
-      y: Math.round(dragStartRef.current.nodeY + dy),
-    });
-  };
+    schedulePosition(
+      Math.round(dragStartRef.current.nodeX + dx),
+      Math.round(dragStartRef.current.nodeY + dy),
+    );
+  });
 
-  const handleMouseUp = () => {
+  const handleMouseUp = useLatestCallback((event?: MouseEvent) => {
+    if (event) handleMouseMove(event);
+    flushPosition();
     dragStartRef.current = null;
     document.removeEventListener("mousemove", handleMouseMove);
     document.removeEventListener("mouseup", handleMouseUp);
-  };
+    window.removeEventListener("blur", handleDragBlur);
+  });
+  const handleDragBlur = useLatestCallback(() => handleMouseUp());
+  useEffect(() => () => {
+    window.removeEventListener("blur", handleDragBlur);
+    document.removeEventListener("mousemove", handleMouseMove);
+    document.removeEventListener("mouseup", handleMouseUp);
+  }, [handleMouseMove, handleMouseUp, handleDragBlur]);
 
   // Drawing on the Mask Canvas
   const initMaskCanvas = () => {
@@ -525,14 +533,15 @@ export default function ImageNode({
     return (
       <div
         id={`canvas-node-${node.id}`}
-        className={`absolute glass-panel-heavy rounded-2xl border transition-all select-none flex flex-col overflow-visible shadow-2xl ${
+        className={`absolute glass-panel-heavy rounded-2xl border transition-colors select-none flex flex-col overflow-visible shadow-2xl ${
           node.status === "loading"
             ? "border-emerald-500/50 shadow-emerald-500/10 shadow-lg ring-2 ring-emerald-500/20"
             : "border-white/10"
         }`}
         style={{
-          left: node.x,
-          top: node.y,
+          left: 0,
+          top: 0,
+          transform: `translate(${node.x}px, ${node.y}px)`,
           width: node.width,
           minHeight: node.height,
           height: node.status === "loading" ? node.height : undefined,
@@ -705,7 +714,7 @@ export default function ImageNode({
     return (
       <div
         id={`canvas-node-${node.id}`}
-        className={`absolute glass-panel-heavy rounded-2xl border transition-all select-none flex flex-col overflow-visible ${
+        className={`absolute glass-panel-heavy rounded-2xl border transition-colors select-none flex flex-col overflow-visible ${
           node.status === "loading"
             ? "border-indigo-500/50 shadow-indigo-500/10 shadow-lg ring-2 ring-indigo-500/20"
             : node.status === "error"
@@ -713,8 +722,9 @@ export default function ImageNode({
             : "border-white/10 shadow-2xl"
         }`}
         style={{
-          left: node.x,
-          top: node.y,
+          left: 0,
+          top: 0,
+          transform: `translate(${node.x}px, ${node.y}px)`,
           width: node.width,
           minHeight: node.height,
           zIndex: 10,
@@ -1074,7 +1084,7 @@ export default function ImageNode({
     return (
       <div
         id={`canvas-node-${node.id}`}
-        className={`absolute glass-panel-heavy rounded-2xl border transition-all select-none flex flex-col overflow-visible ${
+        className={`absolute glass-panel-heavy rounded-2xl border transition-colors select-none flex flex-col overflow-visible ${
           isEditing ? "ring-2 ring-indigo-500/40 border-indigo-500/50" : ""
         } ${
           node.status === "loading"
@@ -1084,8 +1094,9 @@ export default function ImageNode({
             : "border-white/10 shadow-2xl"
         }`}
         style={{
-          left: node.x,
-          top: node.y,
+          left: 0,
+          top: 0,
+          transform: `translate(${node.x}px, ${node.y}px)`,
           width: node.width,
           minHeight: node.height,
           height: node.status === "loading" ? node.height : undefined,
@@ -1557,3 +1568,15 @@ export default function ImageNode({
   // Fallback rendering
   return null;
 }
+
+export default React.memo(ImageNode, (previous, next) => {
+  for (const key of Object.keys(previous) as (keyof ImageNodeProps)[]) {
+    if (key === "incomingNodes" || key === "connectedToNodes") {
+      if (previous[key].length !== next[key].length
+        || previous[key].some((node, index) => node !== next[key][index])) return false;
+    } else if (previous[key] !== next[key]) {
+      return false;
+    }
+  }
+  return true;
+});

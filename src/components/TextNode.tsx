@@ -38,8 +38,8 @@ export default function TextNode({
   return (
     <div
       id={`canvas-node-${node.id}`}
-      className={`absolute rounded-2xl border backdrop-blur-2xl transition-all select-none flex flex-col overflow-visible shadow-2xl border-white/10 ${colorClass}`}
-      style={{ left: node.x, top: node.y, width: node.width, height: node.height, zIndex: 15 }}
+      className={`absolute rounded-2xl border backdrop-blur-2xl transition-colors select-none flex flex-col overflow-visible shadow-2xl border-white/10 ${colorClass}`}
+      style={{ left: 0, top: 0, transform: `translate(${node.x}px, ${node.y}px)`, width: node.width, height: node.height, zIndex: 15 }}
     >
       <div
         onMouseDown={onMouseDown}

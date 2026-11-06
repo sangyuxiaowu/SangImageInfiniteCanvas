@@ -36,10 +36,15 @@ function runTransaction<T>(storeName: string, mode: IDBTransactionMode, action: 
   return openAssetDatabase().then((database) => new Promise((resolve, reject) => {
     const transaction = database.transaction(storeName, mode);
     const request = action(transaction.objectStore(storeName));
-    request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
-    transaction.oncomplete = () => database.close();
-    transaction.onerror = () => reject(transaction.error);
+    transaction.oncomplete = () => {
+      database.close();
+      resolve(request.result);
+    };
+    transaction.onabort = transaction.onerror = () => {
+      database.close();
+      reject(transaction.error || request.error || new Error("Local asset transaction failed."));
+    };
   }));
 }
 
