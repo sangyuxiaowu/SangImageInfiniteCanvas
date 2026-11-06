@@ -27,16 +27,17 @@ export async function getCleanImageBase64(imageUrl: string): Promise<string> {
     const image = new Image();
     image.crossOrigin = "anonymous";
     image.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = image.width;
-      canvas.height = image.height;
-      const context = canvas.getContext("2d");
-      if (!context) {
-        reject(new Error("Unable to create offscreen canvas context."));
-        return;
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const context = canvas.getContext("2d");
+        if (!context) throw new Error("Unable to create offscreen canvas context.");
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/png"));
+      } catch (error) {
+        reject(error);
       }
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL("image/png"));
     };
     image.onerror = () => reject(new Error("无法加载原始图片。请确认图片地址允许跨域访问。"));
     image.src = getImageRequestSource(imageUrl);

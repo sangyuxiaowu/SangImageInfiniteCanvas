@@ -1,5 +1,6 @@
 import { Dispatch, MutableRefObject, SetStateAction, useEffect, useRef } from "react";
 import { getImageAssetUrl, saveImageAsset } from "../assets";
+import { getCleanImageBase64 } from "../imageUtils";
 import { recordOperationLog } from "../operationLogs";
 import { ApiEndpoint, CanvasConnection, CanvasNode } from "../types";
 
@@ -8,7 +9,7 @@ export interface ImageGenerationOptions {
   model?: string;
   quality?: CanvasNode["quality"];
   n?: number;
-  image?: string;
+  referenceImages?: Pick<CanvasNode, "id" | "imageUrl" | "assetId">[];
 }
 
 interface ImageGenerationDependencies {
@@ -45,14 +46,17 @@ function base64ToBlob(value: string, defaultType = "image/png") {
 
 async function getResponseData(response: Response): Promise<ImageApiResponse> {
   const body = await response.text();
-  let data: ImageApiResponse & { error?: string; details?: string };
+  let data: ImageApiResponse & { error?: string | { message?: string }; details?: string };
   try {
     data = JSON.parse(body);
   } catch {
     const preview = body.replace(/\s+/g, " ").slice(0, 200);
     throw new Error(`图像 API 返回了非 JSON 响应（HTTP ${response.status}）：${preview || response.statusText}`);
   }
-  if (!response.ok) throw new Error(data.details || data.error || `图像 API 返回错误（HTTP ${response.status}）。`);
+  if (!response.ok) {
+    const apiError = typeof data.error === "string" ? data.error : data.error?.message;
+    throw new Error(data.details || apiError || `图像 API 返回错误（HTTP ${response.status}）。`);
+  }
   return {
     ...data,
     data: data.data?.map((item) => item.url || !item.b64_json
@@ -90,6 +94,26 @@ export function useImageGeneration({
     recordOperationLog("开始生成图像", `模型：${options.model || generatorNode.model}`, "info");
 
     try {
+      const references = options.referenceImages || [];
+      const images: Blob[] = [];
+      for (const [index, reference] of references.entries()) {
+        if (controller.signal.aborted) return;
+        let temporaryUrl: string | undefined;
+        try {
+          const imageUrl = reference.imageUrl || (reference.assetId
+            ? (temporaryUrl = await getImageAssetUrl(reference.assetId))
+            : undefined);
+          if (!imageUrl) throw new Error("图片资产不存在或无法读取。");
+          images.push(base64ToBlob(await getCleanImageBase64(imageUrl)));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "无法读取图片。";
+          throw new Error(`参考图 ${index + 1} 准备失败：${message}`);
+        } finally {
+          if (temporaryUrl) URL.revokeObjectURL(temporaryUrl);
+        }
+        if (controller.signal.aborted) throw new DOMException("已取消", "AbortError");
+      }
+
       const requestBody = {
         prompt,
         size: options.size,
@@ -98,12 +122,18 @@ export function useImageGeneration({
         n: options.n,
         output_format: "png",
       };
-      const hasReferenceImage = Boolean(options.image);
+      const hasReferenceImage = images.length > 0;
       let body: BodyInit;
       let headers = getAuthorizationHeaders(endpoint);
       if (hasReferenceImage) {
         const formData = new FormData();
-        formData.append("image", base64ToBlob(options.image!), "reference.png");
+        images.forEach((image, index) => {
+          formData.append(
+            images.length === 1 ? "image" : "image[]",
+            image,
+            images.length === 1 ? "reference.png" : `reference-${index + 1}.png`,
+          );
+        });
         Object.entries(requestBody).forEach(([key, value]) => {
           if (value !== undefined) formData.append(key, String(value));
         });
@@ -167,7 +197,7 @@ export function useImageGeneration({
       ]);
       recordOperationLog("生成图像完成", `已生成 ${outputNodes.length} 张图片`, "success");
     } catch (error: unknown) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
+      if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
       const message = error instanceof Error ? error.message : "请求失败";
       console.error(error);
       setNodes((previousNodes) => previousNodes.map((node) => (
