@@ -21,23 +21,24 @@ import {
   Copy,
 } from "lucide-react";
 import { ApiEndpoint, CanvasAspectRatio, CanvasNode, IMAGE_SIZE_BY_ASPECT_RATIO } from "../types";
-import { getImageAssetUrl, getMaskAssetUrl, saveMaskAsset } from "../assets";
+import { getMaskAssetUrl, saveMaskAsset } from "../assets";
 import { createCompositedEditBlob, downloadBlob, getCleanImageBase64, getImageRequestSource } from "../imageUtils";
 import TextNode from "./TextNode";
 import { useFrameCallback } from "../hooks/useFrameCallback";
 import { useLatestCallback } from "../hooks/useLatestCallback";
+import type { ImageGenerationOptions } from "../hooks/useImageGeneration";
 
 interface ImageNodeProps {
   node: CanvasNode;
   activeTool: string;
   zoom: number;
-  onGenerate: (nodeId: string, prompt: string, options: any) => void;
+  onGenerate: (nodeId: string, prompt: string, options: ImageGenerationOptions) => void;
   onGenerateEdit: (
     nodeId: string,
     originalImageBase64: string,
     maskBase64: string,
     prompt: string,
-    options: any
+    options: ImageGenerationOptions
   ) => void;
   onCancelGeneration: (nodeId: string) => void;
   onDelete: (nodeId: string) => void;
@@ -132,8 +133,8 @@ function ImageNode({
   const [isDrawing, setIsDrawing] = useState(false);
 
   // Derived input image for editor nodes
-  const connectedImages = incomingNodes.filter((n) => n.type === "image" && (n.imageUrl || n.assetId));
-  const inputImage = connectedImages[0];
+  const connectedImages = incomingNodes.filter((n) => n.type === "image");
+  const inputImage = connectedImages.find((n) => n.imageUrl || n.assetId);
   const targetImageUrl = node.imageUrl || inputImage?.imageUrl;
   const editResultBaseImageUrl = parentInputImageUrl || node.originalImageUrl;
 
@@ -333,18 +334,13 @@ function ImageNode({
     onUpdatePosition(node.id, { maskAssetId: undefined });
   };
 
-  const generateWithReferenceImage = async (prompt: string) => {
-    let referenceImageUrl = inputImage?.imageUrl;
-    if (!referenceImageUrl && inputImage?.assetId) {
-      referenceImageUrl = await getImageAssetUrl(inputImage.assetId);
-    }
-    const image = referenceImageUrl ? await getCleanImageBase64(referenceImageUrl) : undefined;
+  const generateWithReferenceImages = (prompt: string) => {
     onGenerate(node.id, prompt, {
       size: IMAGE_SIZE_BY_ASPECT_RATIO[aspectRatio],
       model: node.model,
       quality,
       n: quantity,
-      image,
+      referenceImages: connectedImages.map(({ id, imageUrl, assetId }) => ({ id, imageUrl, assetId })),
     });
   };
 
@@ -643,7 +639,10 @@ function ImageNode({
                   {node.imageUrls.map((url, index) => (
                     <div
                       key={url}
-                      onClick={() => onUpdatePosition(node.id, { imageUrl: url })}
+                      onClick={() => onUpdatePosition(node.id, {
+                        imageUrl: url,
+                        assetId: node.assetIds?.length === node.imageUrls?.length ? node.assetIds?.[index] : undefined,
+                      })}
                       className={`group relative aspect-square overflow-hidden rounded-lg border transition-all cursor-pointer ${
                         node.imageUrl === url ? "border-emerald-400 ring-1 ring-emerald-400/30" : "border-white/10 hover:border-white/30"
                       }`}
@@ -813,7 +812,7 @@ function ImageNode({
                   <span>返回修改</span>
                 </button>
                 <button
-                  onClick={() => void generateWithReferenceImage(combinedPrompt)}
+                  onClick={() => generateWithReferenceImages(combinedPrompt)}
                   className="flex-1 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 transition-all cursor-pointer shadow-md shadow-indigo-600/20 flex items-center justify-center gap-1.5 no-drag"
                 >
                   <RefreshCw className="w-3 h-3" />
@@ -932,6 +931,27 @@ function ImageNode({
                     )}
                   </div>
 
+                  <div className="flex flex-col gap-2 bg-slate-900/60 border border-white/5 p-3 rounded-xl">
+                    <div className="flex items-center gap-1.5 text-[10px] text-emerald-400 font-bold uppercase tracking-wider">
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      <span>连线参考图 ({connectedImages.length} 张)</span>
+                    </div>
+                    {connectedImages.length ? (
+                      <div className="flex flex-wrap gap-2">
+                        {connectedImages.map((image, index) => (
+                          <div key={image.id} className="relative w-14 h-14 rounded-lg border border-white/10 bg-slate-950 overflow-hidden" title={`参考图 ${index + 1}`}>
+                            {image.imageUrl
+                              ? <img src={image.imageUrl} alt={`参考图 ${index + 1}`} className="w-full h-full object-cover" />
+                              : <span className="text-[10px] text-slate-400 flex h-full items-center justify-center">待加载</span>}
+                            <span className="absolute bottom-0 right-0 bg-slate-950/80 px-1 text-[10px] text-white">{index + 1}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-400">可将多个图片节点依次连线至此，作为生图参考。</p>
+                    )}
+                  </div>
+
                   {/* Model input field */}
                   <div className="flex flex-col gap-1.5 bg-slate-900/40 p-3 rounded-xl border border-white/5">
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
@@ -1035,7 +1055,7 @@ function ImageNode({
                       type="button"
                       onClick={() => {
                         if (!combinedPrompt) return;
-                        void generateWithReferenceImage(combinedPrompt);
+                        generateWithReferenceImages(combinedPrompt);
                       }}
                       disabled={!combinedPrompt}
                       className="w-full py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:from-white/5 disabled:to-white/5 disabled:text-white/20 text-white font-bold text-xs transition-all shadow-md shadow-indigo-600/20 cursor-pointer flex items-center justify-center gap-1.5"

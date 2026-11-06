@@ -1,9 +1,10 @@
-import React, { useRef } from "react";
+import React, { useLayoutEffect, useRef } from "react";
 import { MousePointer, Hand, PlusSquare, RotateCcw, Trash2, HelpCircle, FileText, Upload, Sliders, Sparkles } from "lucide-react";
 import { CanvasTool } from "../types";
 import { recordOperationLog } from "../operationLogs";
 
 interface ToolbarProps {
+  projectId: string;
   activeTool: CanvasTool;
   onChangeTool: (tool: CanvasTool) => void;
   onResetView: () => void;
@@ -11,10 +12,11 @@ interface ToolbarProps {
   onAddGeneratorNode: () => void;
   onAddEditorNode: () => void;
   onAddTextNode: () => void;
-  onUploadImageNode: (source: string | Blob) => Promise<void>;
+  onUploadImageNode: (source: string | Blob) => Promise<boolean>;
 }
 
 export default function Toolbar({
+  projectId,
   activeTool,
   onChangeTool,
   onResetView,
@@ -25,18 +27,29 @@ export default function Toolbar({
   onUploadImageNode,
 }: ToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const projectIdRef = useRef(projectId);
+  useLayoutEffect(() => {
+    projectIdRef.current = projectId;
+  }, [projectId]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const uploadProjectId = projectId;
+    const files = Array.from(e.target.files || []);
     e.target.value = "";
-    if (!file) return;
-
-    try {
-      await onUploadImageNode(file);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "无法读取图片文件。";
-      recordOperationLog("上传参考图失败", message, "error");
-      window.alert(`上传参考图失败：${message}`);
+    for (const [index, file] of files.entries()) {
+      try {
+        if (projectIdRef.current !== uploadProjectId || !await onUploadImageNode(file)) {
+          window.alert("目标画布已切换，已保存的图片可在本地资产中查看；其余图片未上传。");
+          break;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "无法读取图片文件。";
+        const remaining = files.length - index - 1;
+        const detail = `第 ${index + 1} 张参考图上传失败：${message}${remaining ? `；剩余 ${remaining} 张未上传` : ""}`;
+        recordOperationLog("上传参考图失败", detail, "error");
+        window.alert(detail);
+        break;
+      }
     }
   };
 
@@ -113,7 +126,7 @@ export default function Toolbar({
       <button
         id="btn-upload-image"
         onClick={handleUploadClick}
-        title="上传参考图"
+        title="上传参考图（可多选）"
         className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-100 border border-white/10 font-medium text-xs transition-all cursor-pointer flex items-center gap-1.5"
       >
         <Upload className="w-4 h-4 text-emerald-400" />
@@ -126,6 +139,7 @@ export default function Toolbar({
         ref={fileInputRef}
         onChange={handleFileChange}
         accept="image/*"
+        multiple
         className="hidden"
       />
 

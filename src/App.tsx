@@ -333,8 +333,10 @@ export default function App() {
 
     Promise.all(nodesToHydrate.map(async (node) => {
       const assetIds = node.assetIds?.length ? node.assetIds : node.assetId ? [node.assetId] : [];
-      const imageUrls = (await Promise.all(assetIds.map(getImageAssetUrl))).filter((url): url is string => Boolean(url));
-      return { id: node.id, imageUrls, imageUrl: imageUrls[0] };
+      const urls = await Promise.all(assetIds.map(getImageAssetUrl));
+      const imageUrls = urls.filter((url): url is string => Boolean(url));
+      const selectedIndex = node.assetId ? assetIds.indexOf(node.assetId) : 0;
+      return { id: node.id, imageUrls, imageUrl: urls[selectedIndex < 0 ? 0 : selectedIndex] };
     })).then((hydratedNodes) => {
       hydratedNodes.forEach((node) => {
         node.imageUrls.forEach((url) => {
@@ -935,7 +937,7 @@ export default function App() {
       if (!isCurrentProject(projectId)) {
         URL.revokeObjectURL(imageUrl);
         recordOperationLog("取消添加图片", "目标画布已切换，图片已保存在本地资产中", "info");
-        return;
+        return false;
       }
       assetObjectUrlsRef.current.add(imageUrl);
       const offset = (nodes.length % 8) * 30;
@@ -958,8 +960,10 @@ export default function App() {
       };
 
       setNodes((prev) => [...prev, newNode]);
-  recordOperationLog("上传参考图", "已添加图片节点", "success");
+      recordOperationLog("上传参考图", "已添加图片节点", "success");
+      return true;
     }
+    return false;
   });
 
   const handleCanvasPaste = useLatestCallback((event: ClipboardEvent) => {
@@ -984,7 +988,7 @@ export default function App() {
         try {
           for (const image of images) {
             if (!isCurrentProject(projectId)) break;
-            await handleUploadImageNode(image);
+            if (!await handleUploadImageNode(image)) break;
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : "无法读取剪贴板图片。";
@@ -1918,6 +1922,7 @@ export default function App() {
  
       {/* 6. Bottom Floating Toolbar */}
       <Toolbar
+        projectId={currentProjectId}
         activeTool={activeTool}
         onChangeTool={setActiveTool}
         onResetView={handleRecenter}
